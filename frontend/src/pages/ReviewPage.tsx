@@ -1,18 +1,215 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import Editor from '@monaco-editor/react';
 import { motion } from 'framer-motion';
 import axios from 'axios';
 import { detectLanguage } from '../utils/languageDetection';
-import { AlertTriangle, Bug, Gauge, Lightbulb, ShieldAlert, Sparkles, Wrench } from 'lucide-react';
+import { deriveComplexity } from '../utils/complexityAnalysis';
+import { AlertTriangle, Bug, Copy, Download, Gauge, Lightbulb, ShieldAlert, Sparkles, Upload, Wrench } from 'lucide-react';
 
 const configuredApiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim();
 const API_BASE = configuredApiBase && configuredApiBase.length > 0 ? configuredApiBase.replace(/\/$/, '') : '/api';
 const apiUrl = (path: string): string => `${API_BASE}${path.startsWith('/') ? path : `/${path}`}`;
 
-const initialCode = `def fetch_user(user_id):
-    query = f"SELECT * FROM users WHERE id = {user_id}"
-    return query
-`;
+type SupportedLanguage = 'python' | 'java' | 'javascript' | 'typescript' | 'c' | 'cpp' | 'csharp' | 'go' | 'rust' | 'plaintext';
+
+interface LanguageTemplate {
+  label: string;
+  fileName: string;
+  sampleCode: string;
+}
+
+const LANGUAGE_TEMPLATES: Record<SupportedLanguage, LanguageTemplate> = {
+  python: {
+    label: 'Python',
+    fileName: 'example.py',
+    sampleCode: `def two_sum(nums: list[int], target: int) -> list[int]:
+    seen: dict[int, int] = {}
+    for index, value in enumerate(nums):
+        needed = target - value
+        if needed in seen:
+            return [seen[needed], index]
+        seen[value] = index
+    return []
+`,
+  },
+  java: {
+    label: 'Java',
+    fileName: 'example.java',
+    sampleCode: `import java.util.HashMap;
+import java.util.Map;
+
+public class Example {
+    public static int[] twoSum(int[] nums, int target) {
+        Map<Integer, Integer> seen = new HashMap<>();
+        for (int i = 0; i < nums.length; i++) {
+            int needed = target - nums[i];
+            if (seen.containsKey(needed)) {
+                return new int[]{seen.get(needed), i};
+            }
+            seen.put(nums[i], i);
+        }
+        return new int[]{};
+    }
+}
+`,
+  },
+  javascript: {
+    label: 'JavaScript',
+    fileName: 'example.js',
+    sampleCode: `function twoSum(nums, target) {
+  const seen = new Map();
+  for (let i = 0; i < nums.length; i += 1) {
+    const needed = target - nums[i];
+    if (seen.has(needed)) {
+      return [seen.get(needed), i];
+    }
+    seen.set(nums[i], i);
+  }
+  return [];
+}
+`,
+  },
+  typescript: {
+    label: 'TypeScript',
+    fileName: 'example.ts',
+    sampleCode: `export function twoSum(nums: number[], target: number): [number, number] | [] {
+  const seen = new Map<number, number>();
+  for (let i = 0; i < nums.length; i += 1) {
+    const needed = target - nums[i];
+    if (seen.has(needed)) {
+      return [seen.get(needed) as number, i];
+    }
+    seen.set(nums[i], i);
+  }
+  return [];
+}
+`,
+  },
+  c: {
+    label: 'C',
+    fileName: 'example.c',
+    sampleCode: `#include <stdio.h>
+
+int main(void) {
+    int nums[] = {2, 7, 11, 15};
+    int target = 9;
+    for (int i = 0; i < 4; i++) {
+        for (int j = i + 1; j < 4; j++) {
+            if (nums[i] + nums[j] == target) {
+                printf("[%d, %d]\\n", i, j);
+                return 0;
+            }
+        }
+    }
+    return 0;
+}
+`,
+  },
+  cpp: {
+    label: 'C++',
+    fileName: 'example.cpp',
+    sampleCode: `#include <iostream>
+#include <unordered_map>
+#include <vector>
+
+std::vector<int> twoSum(const std::vector<int>& nums, int target) {
+    std::unordered_map<int, int> seen;
+    for (int i = 0; i < static_cast<int>(nums.size()); i++) {
+        int needed = target - nums[i];
+        auto it = seen.find(needed);
+        if (it != seen.end()) {
+            return {it->second, i};
+        }
+        seen[nums[i]] = i;
+    }
+    return {};
+}
+`,
+  },
+  csharp: {
+    label: 'C#',
+    fileName: 'example.cs',
+    sampleCode: `using System.Collections.Generic;
+
+public static class Example {
+    public static int[] TwoSum(int[] nums, int target) {
+        var seen = new Dictionary<int, int>();
+        for (var i = 0; i < nums.Length; i++) {
+            var needed = target - nums[i];
+            if (seen.TryGetValue(needed, out var index)) {
+                return new[] { index, i };
+            }
+            seen[nums[i]] = i;
+        }
+        return new int[0];
+    }
+}
+`,
+  },
+  go: {
+    label: 'Go',
+    fileName: 'example.go',
+    sampleCode: `package main
+
+func twoSum(nums []int, target int) []int {
+    seen := map[int]int{}
+    for i, value := range nums {
+        needed := target - value
+        if index, ok := seen[needed]; ok {
+            return []int{index, i}
+        }
+        seen[value] = i
+    }
+    return []int{}
+}
+`,
+  },
+  rust: {
+    label: 'Rust',
+    fileName: 'example.rs',
+    sampleCode: `use std::collections::HashMap;
+
+fn two_sum(nums: Vec<i32>, target: i32) -> Vec<usize> {
+    let mut seen: HashMap<i32, usize> = HashMap::new();
+    for (index, value) in nums.iter().enumerate() {
+        let needed = target - value;
+        if let Some(found) = seen.get(&needed) {
+            return vec![*found, index];
+        }
+        seen.insert(*value, index);
+    }
+    vec![]
+}
+`,
+  },
+  plaintext: {
+    label: 'Plain Text',
+    fileName: 'example.txt',
+    sampleCode: 'Paste or upload source code to begin analysis.',
+  },
+};
+
+const DEFAULT_LANGUAGE: SupportedLanguage = 'plaintext';
+
+const isSupportedLanguage = (value: string): value is SupportedLanguage =>
+  Object.prototype.hasOwnProperty.call(LANGUAGE_TEMPLATES, value);
+
+const templateForLanguage = (language: string): LanguageTemplate => {
+  if (isSupportedLanguage(language)) {
+    return LANGUAGE_TEMPLATES[language];
+  }
+  return LANGUAGE_TEMPLATES.plaintext;
+};
+
+const authHeaders = (): Record<string, string> => {
+  const token = localStorage.getItem('token');
+  if (!token) {
+    return {};
+  }
+  return {
+    Authorization: `Bearer ${token}`,
+  };
+};
 
 interface Issue {
   type: string;
@@ -42,6 +239,19 @@ interface ReviewResponse {
   refactored_code?: string;
   documentation_suggestions?: string[];
   unit_test_suggestions?: string[];
+  severity_breakdown?: Record<string, number>;
+  learning_assistant?: {
+    level_1_hint?: string[];
+    level_2_guidance?: string[];
+    level_3_optimized_solution?: {
+      code?: string;
+      explanations?: string[];
+      complexity_improvements?: string[];
+      best_practices?: string[];
+    };
+  };
+  code_hash?: string;
+  cached?: boolean;
 }
 
 type BenefitType = 'Performance' | 'Security' | 'Maintainability' | 'Readability' | 'Best Practice';
@@ -307,109 +517,214 @@ const generateOptimizationTips = (sourceCode: string, lang: string, findings: Fi
   return tips.slice(0, 6);
 };
 
+const stableCodeHash = (value: string): string => {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+  }
+  return (`00000000${(hash >>> 0).toString(16)}`).slice(-8);
+};
+
+const normalizedSeverityBreakdown = (breakdown?: Record<string, number>): Record<string, number> => ({
+  critical: breakdown?.critical ?? 0,
+  high: breakdown?.high ?? 0,
+  medium: breakdown?.medium ?? 0,
+  low: breakdown?.low ?? 0,
+});
+
 const ReviewPage = () => {
-  const [code, setCode] = useState(initialCode);
-  const [fileNameHint, setFileNameHint] = useState('');
-  const [language, setLanguage] = useState('python');
-  const [detectedLanguage, setDetectedLanguage] = useState('Python');
+  const [code, setCode] = useState(LANGUAGE_TEMPLATES[DEFAULT_LANGUAGE].sampleCode);
+  const [fileNameHint, setFileNameHint] = useState(LANGUAGE_TEMPLATES[DEFAULT_LANGUAGE].fileName);
+  const [language, setLanguage] = useState<SupportedLanguage>(DEFAULT_LANGUAGE);
+  const [detectedLanguage, setDetectedLanguage] = useState(LANGUAGE_TEMPLATES[DEFAULT_LANGUAGE].label);
   const [detectionConfidence, setDetectionConfidence] = useState<'high' | 'medium' | 'low'>('high');
-  const [detectionReason, setDetectionReason] = useState('Detected from syntax with score 0.');
-  const [isManualOverride, setIsManualOverride] = useState(false);
+  const [detectionReason, setDetectionReason] = useState('Initialized with language template.');
+  const [autoDetectEnabled, setAutoDetectEnabled] = useState(true);
   const [summary, setSummary] = useState('Review ready to run.');
   const [findings, setFindings] = useState<FindingCard[]>([]);
   const [optimizationTips, setOptimizationTips] = useState<OptimizationTip[]>([]);
   const [score, setScore] = useState<number | null>(null);
+  const [severityBreakdown, setSeverityBreakdown] = useState<Record<string, number>>({ critical: 0, high: 0, medium: 0, low: 0 });
+  const [analysisHash, setAnalysisHash] = useState('');
+  const [wasCached, setWasCached] = useState(false);
+  const [assistantViewLevel, setAssistantViewLevel] = useState<1 | 2 | 3>(1);
+  const [learningAssistant, setLearningAssistant] = useState<ReviewResponse['learning_assistant']>({});
   const [complexityAnalysis, setComplexityAnalysis] = useState('');
   const [refactoredCode, setRefactoredCode] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [copySuccess, setCopySuccess] = useState(false);
+  const localAnalysisCache = useRef<Map<string, ReviewResponse>>(new Map());
 
   const languageOptions = useMemo(
     () => [
-      { value: 'plaintext', label: 'Plain Text' },
-      { value: 'python', label: 'Python' },
-      { value: 'javascript', label: 'JavaScript' },
-      { value: 'typescript', label: 'TypeScript' },
-      { value: 'java', label: 'Java' },
-      { value: 'c', label: 'C' },
-      { value: 'cpp', label: 'C++' },
-      { value: 'go', label: 'Go' },
-      { value: 'rust', label: 'Rust' },
-      { value: 'csharp', label: 'C#' },
-      { value: 'sql', label: 'SQL' },
-      { value: 'html', label: 'HTML' },
-      { value: 'css', label: 'CSS' },
-      { value: 'json', label: 'JSON' },
-      { value: 'shell', label: 'Shell' },
+      { value: 'python', label: LANGUAGE_TEMPLATES.python.label },
+      { value: 'java', label: LANGUAGE_TEMPLATES.java.label },
+      { value: 'javascript', label: LANGUAGE_TEMPLATES.javascript.label },
+      { value: 'typescript', label: LANGUAGE_TEMPLATES.typescript.label },
+      { value: 'c', label: LANGUAGE_TEMPLATES.c.label },
+      { value: 'cpp', label: LANGUAGE_TEMPLATES.cpp.label },
+      { value: 'csharp', label: LANGUAGE_TEMPLATES.csharp.label },
+      { value: 'go', label: LANGUAGE_TEMPLATES.go.label },
+      { value: 'rust', label: LANGUAGE_TEMPLATES.rust.label },
+      { value: 'plaintext', label: LANGUAGE_TEMPLATES.plaintext.label },
     ],
     []
   );
 
+  const supportedLanguages = useMemo(() => new Set(languageOptions.map((option) => option.value)), [languageOptions]);
+
   useEffect(() => {
+    if (!autoDetectEnabled) {
+      const manualTemplate = templateForLanguage(language);
+      setDetectedLanguage(manualTemplate.label);
+      setDetectionConfidence('high');
+      setDetectionReason(`Manual selection active. Using ${manualTemplate.label} for editor, filename, and analysis.`);
+      return;
+    }
+
     const detection = detectLanguage(code, fileNameHint);
     setDetectedLanguage(detection.detectedLanguage);
     setDetectionConfidence(detection.confidence);
     setDetectionReason(detection.reason);
 
-    if (!isManualOverride) {
-      setLanguage(detection.language);
+    const autoLanguage = supportedLanguages.has(detection.language) ? detection.language : 'plaintext';
+    if (isSupportedLanguage(autoLanguage)) {
+      setLanguage(autoLanguage);
     }
-  }, [code, fileNameHint, isManualOverride]);
+  }, [autoDetectEnabled, code, fileNameHint, language, supportedLanguages]);
+
+  const applyReviewPayload = (payload: ReviewResponse, options?: { fromCache?: boolean; localHash?: string }) => {
+    const mergedScore = payload.overall_score ?? payload.score ?? null;
+    setSummary(payload.summary);
+    setScore(mergedScore);
+    setComplexityAnalysis(payload.complexity_analysis || '');
+    setRefactoredCode(payload.refactored_code || '');
+    setSeverityBreakdown(normalizedSeverityBreakdown(payload.severity_breakdown));
+    setLearningAssistant(payload.learning_assistant || {});
+    setAnalysisHash(payload.code_hash || options?.localHash || '');
+    setWasCached(Boolean(payload.cached || options?.fromCache));
+
+    const directIssues = (payload.issues || []).map((issue, idx) => asFindingCard(issue as unknown as Record<string, unknown>, issue.type || 'Issue', `issue-${idx}`));
+
+    const groupedSources: Array<[string, Issue[] | undefined]> = [
+      ['Bug', payload.bugs],
+      ['Security', payload.security_vulnerabilities],
+      ['Performance', payload.performance_issues],
+      ['Code Smell', payload.code_smells],
+      ['Best Practice', payload.best_practice_violations],
+    ];
+
+    const groupedFindings = groupedSources.flatMap(([category, list], groupIndex) =>
+      (list || []).map((item, itemIndex) => asFindingCard(item as unknown as Record<string, unknown>, category, `group-${groupIndex}-${itemIndex}`))
+    );
+
+    const aiExplanationFindings = extractFindingsFromTextList(payload.ai_explanations || [], 'ai-explanation');
+    const suggestedFixFindings = extractFindingsFromTextList(payload.suggested_fixes || [], 'ai-fix');
+
+    const mergedByKey = new Map<string, FindingCard>();
+    [...directIssues, ...groupedFindings, ...aiExplanationFindings, ...suggestedFixFindings].forEach((finding) => {
+      const key = `${finding.category}|${finding.title}|${finding.description}|${finding.lineNumber ?? 0}`.toLowerCase();
+      if (!mergedByKey.has(key)) {
+        mergedByKey.set(key, finding);
+      }
+    });
+
+    const mergedFindings = Array.from(mergedByKey.values()).sort((a, b) => {
+      const severityDiff = (severityRank[b.severity] || 0) - (severityRank[a.severity] || 0);
+      if (severityDiff !== 0) return severityDiff;
+      const lineA = a.lineNumber ?? Number.MAX_SAFE_INTEGER;
+      const lineB = b.lineNumber ?? Number.MAX_SAFE_INTEGER;
+      return lineA - lineB;
+    });
+
+    setFindings(mergedFindings);
+    setOptimizationTips(generateOptimizationTips(code, language, mergedFindings));
+  };
+
+  const handleFileUpload = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const text = await file.text();
+      setFileNameHint(file.name);
+      setCode(text);
+      setError(null);
+    } catch {
+      setError('Unable to read uploaded file. Please try another file or paste code manually.');
+    } finally {
+      event.target.value = '';
+    }
+  };
+
+  const handleManualLanguageChange = (nextLanguage: SupportedLanguage) => {
+    const template = templateForLanguage(nextLanguage);
+    setAutoDetectEnabled(false);
+    setLanguage(nextLanguage);
+    setFileNameHint(template.fileName);
+    setCode(template.sampleCode);
+    setDetectedLanguage(template.label);
+    setDetectionConfidence('high');
+    setDetectionReason(`Manual selection active. Loaded ${template.fileName} template.`);
+    setError(null);
+  };
+
+  const handleAutoDetectToggle = (enabled: boolean) => {
+    setAutoDetectEnabled(enabled);
+    if (enabled) {
+      const detection = detectLanguage(code, fileNameHint);
+      const autoLanguage = supportedLanguages.has(detection.language) ? detection.language : 'plaintext';
+      if (isSupportedLanguage(autoLanguage)) {
+        setLanguage(autoLanguage);
+      }
+      setDetectedLanguage(detection.detectedLanguage);
+      setDetectionConfidence(detection.confidence);
+      setDetectionReason(detection.reason);
+      return;
+    }
+
+    const template = templateForLanguage(language);
+    setDetectedLanguage(template.label);
+    setDetectionConfidence('high');
+    setDetectionReason(`Manual selection active. Using ${template.label}.`);
+  };
 
   const handleReview = async () => {
     setLoading(true);
     setError(null);
+
+    const sourceHash = stableCodeHash(code);
+    const cacheKey = `${sourceHash}:${language}:standard-v1`;
+    const cachedLocal = localAnalysisCache.current.get(cacheKey);
+    if (cachedLocal) {
+      applyReviewPayload(cachedLocal, { fromCache: true, localHash: sourceHash });
+      setLoading(false);
+      return;
+    }
+
     try {
       const response = await axios.post<ReviewResponse>(apiUrl('/review/'), {
         code,
         language,
+        analysis_profile: 'standard-v1',
+      }, {
+        headers: authHeaders(),
       });
       const payload = response.data;
-      setSummary(payload.summary);
-      setScore(payload.overall_score ?? payload.score ?? null);
-      setComplexityAnalysis(payload.complexity_analysis || '');
-      setRefactoredCode(payload.refactored_code || '');
-
-      const directIssues = (payload.issues || []).map((issue, idx) => asFindingCard(issue as unknown as Record<string, unknown>, issue.type || 'Issue', `issue-${idx}`));
-
-      const groupedSources: Array<[string, Issue[] | undefined]> = [
-        ['Bug', payload.bugs],
-        ['Security', payload.security_vulnerabilities],
-        ['Performance', payload.performance_issues],
-        ['Code Smell', payload.code_smells],
-        ['Best Practice', payload.best_practice_violations],
-      ];
-
-      const groupedFindings = groupedSources.flatMap(([category, list], groupIndex) =>
-        (list || []).map((item, itemIndex) => asFindingCard(item as unknown as Record<string, unknown>, category, `group-${groupIndex}-${itemIndex}`))
-      );
-
-      const aiExplanationFindings = extractFindingsFromTextList(payload.ai_explanations || [], 'ai-explanation');
-      const suggestedFixFindings = extractFindingsFromTextList(payload.suggested_fixes || [], 'ai-fix');
-
-      const mergedByKey = new Map<string, FindingCard>();
-      [...directIssues, ...groupedFindings, ...aiExplanationFindings, ...suggestedFixFindings].forEach((finding) => {
-        const key = `${finding.category}|${finding.title}|${finding.description}|${finding.lineNumber ?? 0}`.toLowerCase();
-        if (!mergedByKey.has(key)) {
-          mergedByKey.set(key, finding);
-        }
-      });
-
-      const mergedFindings = Array.from(mergedByKey.values()).sort((a, b) => {
-        const severityDiff = (severityRank[b.severity] || 0) - (severityRank[a.severity] || 0);
-        if (severityDiff !== 0) return severityDiff;
-        const lineA = a.lineNumber ?? Number.MAX_SAFE_INTEGER;
-        const lineB = b.lineNumber ?? Number.MAX_SAFE_INTEGER;
-        return lineA - lineB;
-      });
-
-      setFindings(mergedFindings);
-      setOptimizationTips(generateOptimizationTips(code, language, mergedFindings));
+      localAnalysisCache.current.set(cacheKey, payload);
+      applyReviewPayload(payload, { localHash: sourceHash });
     } catch (err: any) {
       console.error('Error running code review:', err);
+      const statusCode = Number(err?.response?.status ?? 0);
       const serverDetail = err?.response?.data?.detail;
       const networkDetail = err?.message;
-      setError(serverDetail || networkDetail || 'Failed to complete review. Please check backend status.');
+      if (statusCode === 401) {
+        setError('Your session is invalid or expired. Please log in again and retry analysis.');
+      } else {
+        setError(serverDetail || networkDetail || 'Failed to complete review. Please check backend status.');
+      }
       setSummary('An error occurred during analysis.');
       setFindings([]);
       setOptimizationTips([]);
@@ -430,6 +745,42 @@ const ReviewPage = () => {
     }
   };
 
+  const optimizedCodeForLevel3 =
+    learningAssistant?.level_3_optimized_solution?.code?.trim() ||
+    refactoredCode.trim() ||
+    code;
+
+  const level3Explanation = learningAssistant?.level_3_optimized_solution?.explanations || [];
+  const level3Complexity = learningAssistant?.level_3_optimized_solution?.complexity_improvements || [];
+  const level3BestPractices = learningAssistant?.level_3_optimized_solution?.best_practices || [];
+  const originalComplexity = useMemo(() => deriveComplexity(code, language), [code, language]);
+  const optimizedComplexity = useMemo(() => deriveComplexity(optimizedCodeForLevel3, language), [optimizedCodeForLevel3, language]);
+
+  const handleCopyOptimizedCode = async () => {
+    try {
+      await navigator.clipboard.writeText(optimizedCodeForLevel3);
+      setCopySuccess(true);
+      window.setTimeout(() => setCopySuccess(false), 1200);
+    } catch {
+      setCopySuccess(false);
+    }
+  };
+
+  const handleDownloadOptimizedCode = () => {
+    const template = templateForLanguage(language);
+    const blob = new Blob([optimizedCodeForLevel3], { type: 'text/plain;charset=utf-8' });
+    const objectUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    const suffixIndex = template.fileName.lastIndexOf('.');
+    const extension = suffixIndex >= 0 ? template.fileName.slice(suffixIndex) : '.txt';
+    anchor.href = objectUrl;
+    anchor.download = `optimized${extension}`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(objectUrl);
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
@@ -444,7 +795,7 @@ const ReviewPage = () => {
             loading ? 'opacity-50 cursor-not-allowed' : ''
           }`}
         >
-          {loading ? 'Analyzing...' : 'Analyze code'}
+          {loading ? 'Analyzing...' : 'Analyze Code'}
         </button>
       </div>
 
@@ -457,20 +808,19 @@ const ReviewPage = () => {
           <div className="mb-3 flex items-center justify-between">
             <h2 className="text-lg font-semibold text-white">Editor</h2>
             <div className="flex items-center gap-2">
-              {isManualOverride && (
-                <button
-                  type="button"
-                  onClick={() => setIsManualOverride(false)}
-                  className="rounded-xl border border-slate-700 px-2 py-1 text-[11px] text-slate-300 hover:border-cyan-500"
-                >
-                  Use auto
-                </button>
-              )}
+              <label className="inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-950 px-3 py-1.5 text-[11px] text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={autoDetectEnabled}
+                  onChange={(event) => handleAutoDetectToggle(event.target.checked)}
+                  className="h-3.5 w-3.5 accent-cyan-400"
+                />
+                Auto Detect
+              </label>
               <select
                 value={language}
                 onChange={(e) => {
-                  setIsManualOverride(true);
-                  setLanguage(e.target.value);
+                  handleManualLanguageChange(e.target.value as SupportedLanguage);
                 }}
                 className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-1.5 text-xs text-slate-300 outline-none focus:border-cyan-500"
               >
@@ -498,10 +848,18 @@ const ReviewPage = () => {
                 <span className="ml-2 uppercase tracking-wide text-[10px] text-cyan-300">{detectionConfidence}</span>
               </p>
               <p className="mt-1 text-[11px] text-slate-400">{detectionReason}</p>
-              {detectionConfidence === 'low' && !isManualOverride && (
+              {detectionConfidence === 'low' && autoDetectEnabled && (
                 <p className="mt-1 text-[11px] text-amber-300">Detection confidence is low. Choose a language from the selector if needed.</p>
               )}
             </div>
+          </div>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200 hover:border-cyan-500">
+              <Upload className="h-4 w-4 text-cyan-300" />
+              Upload source file
+              <input type="file" className="hidden" onChange={handleFileUpload} accept=".py,.java,.js,.ts,.c,.cpp,.cc,.cxx,.cs,.go,.rs,.txt" />
+            </label>
+            <p className="text-[11px] text-slate-400">Extension is checked first, then syntax is validated for confidence.</p>
           </div>
           <div className="h-[420px] overflow-hidden rounded-2xl border border-slate-800">
             <Editor
@@ -521,19 +879,30 @@ const ReviewPage = () => {
         >
           <div className="flex items-center justify-between border-b border-slate-800 pb-4 mb-4">
             <h2 className="text-xl font-semibold text-white">Findings</h2>
-            {score !== null && (
-              <span
-                className={`px-3 py-1 rounded-full text-xs font-bold ${
-                  score >= 90
-                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                    : score >= 70
-                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                    : 'bg-red-500/20 text-red-300 border border-red-500/30'
-                }`}
-              >
-                Score: {score}/100
-              </span>
-            )}
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              {score !== null && (
+                <span
+                  className={`px-3 py-1 rounded-full text-xs font-bold ${
+                    score >= 90
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                      : score >= 70
+                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                      : 'bg-red-500/20 text-red-300 border border-red-500/30'
+                  }`}
+                >
+                  Overall Score: {score}/100
+                </span>
+              )}
+              {analysisHash && <span className="rounded-full border border-slate-700 px-3 py-1 text-[10px] uppercase tracking-wider text-slate-300">Hash {analysisHash.slice(0, 8)}</span>}
+              {wasCached && <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-[10px] uppercase tracking-wider text-emerald-300">Cached Result</span>}
+            </div>
+          </div>
+
+          <div className="mb-4 grid grid-cols-2 gap-2 text-xs md:grid-cols-4">
+            <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-red-200">Critical: <span className="font-semibold">{severityBreakdown.critical ?? 0}</span></div>
+            <div className="rounded-xl border border-orange-500/30 bg-orange-500/10 px-3 py-2 text-orange-200">High: <span className="font-semibold">{severityBreakdown.high ?? 0}</span></div>
+            <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-amber-200">Medium: <span className="font-semibold">{severityBreakdown.medium ?? 0}</span></div>
+            <div className="rounded-xl border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-blue-200">Low: <span className="font-semibold">{severityBreakdown.low ?? 0}</span></div>
           </div>
 
           <div className="flex-1 space-y-4 overflow-y-auto max-h-[380px] pr-1">
@@ -641,6 +1010,86 @@ const ReviewPage = () => {
               </div>
             )}
 
+            <div className="rounded-2xl border border-cyan-500/20 bg-cyan-500/10 p-4">
+              <div className="mb-3 flex items-center justify-between">
+                <p className="text-xs uppercase tracking-wider text-cyan-300 font-semibold">3-Level Learning Assistant</p>
+                <div className="flex items-center gap-2">
+                  {[1, 2, 3].map((level) => (
+                    <button
+                      key={`assistant-level-${level}`}
+                      type="button"
+                      onClick={() => setAssistantViewLevel(level as 1 | 2 | 3)}
+                      className={`rounded-full border px-3 py-1 text-[11px] font-semibold transition ${
+                        assistantViewLevel === level
+                          ? 'border-cyan-300 bg-cyan-100 text-slate-900'
+                          : 'border-cyan-500/30 bg-transparent text-cyan-200 hover:border-cyan-300'
+                      }`}
+                    >
+                      Level {level}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {assistantViewLevel === 1 && (
+                <div className="space-y-2">
+                  <p className="text-sm text-cyan-100">Hint: small nudges without revealing the full solution.</p>
+                  {(learningAssistant?.level_1_hint || ['Run analysis to generate learning hints.']).map((item, idx) => (
+                    <div key={`hint-${idx}`} className="rounded-xl border border-cyan-300/20 bg-slate-950/70 p-3 text-xs text-slate-200">
+                      {item}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {assistantViewLevel === 2 && (
+                <div className="space-y-2">
+                  <p className="text-sm text-cyan-100">Guidance: issue explanation and optimization suggestions.</p>
+                  {(learningAssistant?.level_2_guidance || ['Run analysis to generate guidance.']).map((item, idx) => (
+                    <div key={`guidance-${idx}`} className="rounded-xl border border-cyan-300/20 bg-slate-950/70 p-3 text-xs text-slate-200">
+                      {item}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {assistantViewLevel === 3 && (
+                <div className="space-y-3">
+                  <p className="text-sm text-cyan-100">Optimized solution: refactor, complexity improvements, and best practices.</p>
+                  {level3Explanation.length > 0 && (
+                    <div className="rounded-xl border border-cyan-300/20 bg-slate-950/70 p-3">
+                      <p className="text-[11px] uppercase tracking-wider text-slate-400">Explanation</p>
+                      <div className="mt-1 space-y-1 text-xs text-slate-200">
+                        {level3Explanation.map((item, idx) => (
+                          <p key={`lvl3-exp-${idx}`}>{item}</p>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {level3Complexity.length > 0 && (
+                    <div className="rounded-xl border border-cyan-300/20 bg-slate-950/70 p-3">
+                      <p className="text-[11px] uppercase tracking-wider text-slate-400">Complexity Improvements</p>
+                      <div className="mt-1 space-y-1 text-xs text-slate-200">
+                        {level3Complexity.map((item, idx) => (
+                          <p key={`lvl3-cx-${idx}`}>{item}</p>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {level3BestPractices.length > 0 && (
+                    <div className="rounded-xl border border-cyan-300/20 bg-slate-950/70 p-3">
+                      <p className="text-[11px] uppercase tracking-wider text-slate-400">Best Practices</p>
+                      <div className="mt-1 space-y-1 text-xs text-slate-200">
+                        {level3BestPractices.map((item, idx) => (
+                          <p key={`lvl3-bp-${idx}`}>{item}</p>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
             {complexityAnalysis && (
               <div className="rounded-2xl border border-indigo-500/20 bg-indigo-500/10 p-4">
                 <p className="text-xs uppercase tracking-wider text-indigo-300 font-semibold mb-2">Complexity Analysis</p>
@@ -648,10 +1097,66 @@ const ReviewPage = () => {
               </div>
             )}
 
-            {refactoredCode && (
+            {assistantViewLevel === 3 && (
               <div className="rounded-2xl border border-slate-700 bg-slate-950/70 p-4">
-                <p className="text-xs uppercase tracking-wider text-slate-400 font-semibold mb-2">Refactored Code</p>
-                <pre className="text-xs text-slate-300 whitespace-pre-wrap overflow-x-auto">{refactoredCode}</pre>
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs uppercase tracking-wider text-slate-400 font-semibold">Optimized Code</p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleCopyOptimizedCode}
+                      className="inline-flex items-center gap-1 rounded-lg border border-slate-600 px-2.5 py-1 text-[11px] text-slate-200 hover:border-cyan-400"
+                    >
+                      <Copy className="h-3.5 w-3.5" />
+                      {copySuccess ? 'Copied' : 'Copy'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleDownloadOptimizedCode}
+                      className="inline-flex items-center gap-1 rounded-lg border border-slate-600 px-2.5 py-1 text-[11px] text-slate-200 hover:border-cyan-400"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                      Download
+                    </button>
+                  </div>
+                </div>
+                <div className="h-[320px] overflow-hidden rounded-lg border border-slate-800">
+                  <Editor
+                    theme="vs-dark"
+                    language={language}
+                    value={optimizedCodeForLevel3}
+                    options={{
+                      readOnly: true,
+                      lineNumbers: 'on',
+                      folding: true,
+                      minimap: { enabled: false },
+                      scrollBeyondLastLine: false,
+                      wordWrap: 'off',
+                      automaticLayout: true,
+                      scrollbar: {
+                        vertical: 'visible',
+                        horizontal: 'visible',
+                        verticalScrollbarSize: 10,
+                        horizontalScrollbarSize: 10,
+                        useShadows: false,
+                      },
+                    }}
+                  />
+                </div>
+
+                <div className="mt-3 rounded-xl border border-slate-700 bg-slate-900/60 p-3">
+                  <p className="text-[11px] uppercase tracking-wider text-slate-400">Complexity Comparison</p>
+                  <div className="mt-2 grid gap-2 text-xs md:grid-cols-2">
+                    <div className="rounded-lg border border-slate-700/80 bg-slate-950/70 p-2 text-slate-200">
+                      Original Time Complexity {'->'} Optimized Time Complexity
+                      <p className="mt-1 font-semibold text-cyan-300">{originalComplexity.time} {'->'} {optimizedComplexity.time}</p>
+                    </div>
+                    <div className="rounded-lg border border-slate-700/80 bg-slate-950/70 p-2 text-slate-200">
+                      Original Space Complexity {'->'} Optimized Space Complexity
+                      <p className="mt-1 font-semibold text-cyan-300">{originalComplexity.space} {'->'} {optimizedComplexity.space}</p>
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
           </div>

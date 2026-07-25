@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import hashlib
 from typing import Any
 import httpx
 from app.ai.base import BaseAIProvider
@@ -161,6 +162,12 @@ class OllamaProvider(BaseAIProvider):
             "system": system_prompt,
             "format": "json",
             "stream": False,
+            "options": {
+                "temperature": 0,
+                "top_p": 1,
+                "repeat_penalty": 1,
+                "seed": int(hashlib.sha256(code.encode('utf-8')).hexdigest()[:8], 16),
+            },
         }
 
         try:

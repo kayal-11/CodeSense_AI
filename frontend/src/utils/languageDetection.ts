@@ -156,7 +156,7 @@ export const detectLanguage = (code: string, fileNameHint?: string): LanguageDet
   const extensionLanguage = extensionToLanguage[extension];
 
   if (extensionLanguage) {
-    scores[extensionLanguage] = (scores[extensionLanguage] ?? 0) + 4;
+    scores[extensionLanguage] = (scores[extensionLanguage] ?? 0) + 6;
   }
 
   for (const rule of patternRules) {
@@ -180,6 +180,37 @@ export const detectLanguage = (code: string, fileNameHint?: string): LanguageDet
   const secondScore = ranked[1]?.[1] ?? 0;
   const gap = topScore - secondScore;
 
+  const syntaxScoreForExtension = extensionLanguage ? scores[extensionLanguage] ?? 0 : 0;
+  const extensionValidated = Boolean(extensionLanguage && syntaxScoreForExtension >= 7);
+  const extensionConflicted = Boolean(extensionLanguage && topLanguage !== extensionLanguage && topScore >= syntaxScoreForExtension + 2);
+
+  if (extensionLanguage && extensionConflicted) {
+    return {
+      language: topLanguage,
+      confidence: topScore >= scoreThresholds.high ? 'high' : 'medium',
+      detectedLanguage: labelForLanguage(topLanguage),
+      reason: `Extension suggested ${labelForLanguage(extensionLanguage)}, but syntax strongly matches ${labelForLanguage(topLanguage)} (score ${topScore}).`,
+    };
+  }
+
+  if (extensionLanguage && extensionValidated) {
+    return {
+      language: extensionLanguage,
+      confidence: 'high',
+      detectedLanguage: labelForLanguage(extensionLanguage),
+      reason: `Detected from extension first and validated by syntax patterns (score ${syntaxScoreForExtension}).`,
+    };
+  }
+
+  if (extensionLanguage && !extensionValidated) {
+    return {
+      language: extensionLanguage,
+      confidence: topScore >= scoreThresholds.medium ? 'medium' : 'low',
+      detectedLanguage: labelForLanguage(extensionLanguage),
+      reason: `Detected from extension first, but syntax validation is limited (score ${syntaxScoreForExtension}).`,
+    };
+  }
+
   const confidence: LanguageConfidence =
     topScore >= scoreThresholds.high && gap >= 2
       ? 'high'
@@ -196,7 +227,7 @@ export const detectLanguage = (code: string, fileNameHint?: string): LanguageDet
     };
   }
 
-  const sourceNote = extensionLanguage && extensionLanguage === topLanguage ? 'extension + syntax' : extensionLanguage ? 'syntax (extension conflict)' : 'syntax';
+  const sourceNote = 'syntax';
 
   return {
     language: topLanguage,
