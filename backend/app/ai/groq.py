@@ -199,7 +199,7 @@ class GroqProvider(BaseAIProvider):
             '  ],\n'
             '  "verdict": "Production-ready with minor improvements.", // 1 concise sentence\n'
             '  "is_already_optimal": false, // boolean: true if current code is optimal\n'
-            '  "optimized_code": "Complete compilable refactored code without line truncation or merging", // empty if is_already_optimal\n'
+            '  "optimized_code": "Return ONLY complete compilable source code with proper indentation and line breaks. Never minify or compress the code into one line. Every class, method, brace, and statement must be formatted exactly as in a professional IDE. Do not include markdown fences.", // empty if is_already_optimal\n'
             '  "level_1_hint": "Check hash map lookup efficiency for linear time complexity.",\n'
             '  "level_2_approach": "Scan the collection once while storing complements in hash table.",\n'
             '  "level_3_solution_summary": "Linear time complexity solution using hash map for O(1) lookups."\n'
@@ -209,6 +209,12 @@ class GroqProvider(BaseAIProvider):
             "2. top_fixes MUST contain 2 to 3 short bullet points.\n"
             "3. If code is already optimal, set is_already_optimal=true and optimized_code=\"\".\n"
             "4. Return ONLY raw valid JSON."
+            "5. optimized_code MUST be properly formatted source code.\n"
+            "6. Never minify or compress the code.\n"
+            "7. Preserve standard indentation (4 spaces).\n"
+            "8. Put every class, method, statement, and brace on separate lines.\n"
+            "9. Do not escape newlines (\\n) or tabs (\\t).\n"
+            "10. Do not wrap optimized_code in triple backticks."
         )
 
         prompt = (
@@ -277,15 +283,33 @@ class GroqProvider(BaseAIProvider):
                     verdict = str(result.get("verdict", result.get("final_verdict", "Production-ready with minor improvements."))).strip()
 
                     is_already_optimal = bool(result.get("is_already_optimal", False))
-                    raw_opt_code = str(result.get("optimized_code", result.get("refactored_code", ""))).strip()
+                    
+                    raw_opt_code = str(
+                        result.get("optimized_code", result.get("refactored_code", ""))
+                    ).strip()
+
                     clean_opt_code = raw_opt_code
+
+                    # Remove markdown code fences
                     if clean_opt_code.startswith("```"):
-                        first_newline = clean_opt_code.find("\n")
-                        if first_newline != -1:
-                            clean_opt_code = clean_opt_code[first_newline + 1:]
-                        if clean_opt_code.endswith("```"):
-                            clean_opt_code = clean_opt_code[:-3]
-                        clean_opt_code = clean_opt_code.strip()
+                        lines = clean_opt_code.splitlines()
+                        if len(lines) >= 3:
+                            clean_opt_code = "\n".join(lines[1:-1])
+
+                    # Decode escaped characters returned by the model
+                    clean_opt_code = (
+                        clean_opt_code
+                        .replace("\\r\\n", "\n")
+                        .replace("\\n", "\n")
+                        .replace("\\t", "    ")
+                        .replace('\\"', '"')
+                    )
+
+                    # Normalize line endings
+                    clean_opt_code = clean_opt_code.replace("\r\n", "\n").replace("\r", "\n")
+
+                    clean_opt_code = clean_opt_code.strip()
+
 
                     if is_already_optimal or clean_opt_code == code.strip():
                         clean_opt_code = ""

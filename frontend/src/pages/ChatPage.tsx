@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
 import axios from 'axios';
+import ReactMarkdown from "react-markdown";
 
 const configuredApiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim();
 const API_BASE = configuredApiBase && configuredApiBase.length > 0 ? configuredApiBase.replace(/\/$/, '') : '/api';
@@ -66,7 +67,9 @@ const ChatPage = () => {
                   : 'ml-auto bg-cyan-500/20 text-cyan-100 border border-cyan-500/20'
               }`}
             >
-              {message.content}
+               <ReactMarkdown>
+                  {message.content}
+               </ReactMarkdown>
             </div>
           ))}
           {loading && (
