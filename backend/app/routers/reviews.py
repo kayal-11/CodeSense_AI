@@ -158,7 +158,7 @@ async def review_code(
 ) -> ReviewResponse:
     normalized_language = normalize_language(payload.language)
     source_hash = code_hash(payload.code)
-    settings_hash = settings_fingerprint(normalized_language, payload.analysis_profile)
+    settings_hash = settings_fingerprint(normalized_language, f"{payload.analysis_profile}:{service.provider_type}")
     cache_key = source_hash
 
     cached_entry = ANALYSIS_CACHE.get(cache_key)
@@ -191,21 +191,37 @@ async def review_code(
         normalized_issues = dedupe_and_sort_issues([normalize_issue(issue) for issue in raw_issues])
         buckets = split_issue_buckets(normalized_issues)
         breakdown = severity_breakdown(normalized_issues)
-        score = deterministic_score(normalized_issues)
-        overall_score = score
-        complexity_analysis = str(ai_analysis.get('complexity_analysis', '')).strip()
-        refactored_code = str(ai_analysis.get('refactored_code', '')).strip() or payload.code
-        summary = deterministic_summary(normalized_language, normalized_issues, breakdown, score)
+        # Use AI-generated score and summary if returned by active provider
+        ai_score = ai_analysis.get('score') or ai_analysis.get('overall_score')
+        if ai_score is not None:
+            score = _coerce_int(ai_score, deterministic_score(normalized_issues))
+            overall_score = score
+        else:
+            score = deterministic_score(normalized_issues)
+            overall_score = score
 
-        learning_assistant = learning_assistant_payload(
-            language=normalized_language,
-            source_code=payload.code,
-            issues=normalized_issues,
-            complexity_analysis=complexity_analysis,
-            suggested_fixes=suggested_fixes,
-            ai_explanations=ai_explanations,
-            refactored_code=refactored_code,
-        )
+        complexity_analysis = str(ai_analysis.get('complexity_analysis', '')).strip()
+        refactored_code = str(ai_analysis.get('refactored_code', '')).strip()
+
+        ai_summary = ai_analysis.get('summary')
+        if ai_summary and isinstance(ai_summary, str) and ai_summary.strip():
+            summary = ai_summary.strip()
+        else:
+            summary = deterministic_summary(normalized_language, normalized_issues, breakdown, score)
+
+        ai_learning_assistant = ai_analysis.get('learning_assistant')
+        if isinstance(ai_learning_assistant, dict) and ai_learning_assistant:
+            learning_assistant = ai_learning_assistant
+        else:
+            learning_assistant = learning_assistant_payload(
+                language=normalized_language,
+                source_code=payload.code,
+                issues=normalized_issues,
+                complexity_analysis=complexity_analysis,
+                suggested_fixes=suggested_fixes,
+                ai_explanations=ai_explanations,
+                refactored_code=refactored_code or payload.code,
+            )
 
         response_payload = ReviewResponse(
             summary=summary,

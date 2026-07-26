@@ -2,7 +2,9 @@ import logging
 from typing import Any
 from app.ai.base import BaseAIProvider
 from app.ai.fallback import FallbackProvider
+from app.ai.groq import GroqProvider
 from app.ai.ollama import OllamaProvider
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -10,17 +12,37 @@ logger = logging.getLogger(__name__)
 class LLMService:
     """
     Service coordinating AI providers.
-    Dynamically routes to Ollama (if running) or FallbackProvider (if offline).
+    Dynamically routes requests based on LLM_PROVIDER ('groq' or 'ollama').
+    Falls back to FallbackProvider or static analysis review if configured provider is unavailable.
     """
 
     def __init__(self) -> None:
+        self.groq_provider = GroqProvider()
         self.ollama_provider = OllamaProvider()
         self.fallback_provider = FallbackProvider()
+
+    @property
+    def provider_type(self) -> str:
+        return (settings.llm_provider or 'groq').strip().lower()
+
+    def get_configured_provider(self) -> BaseAIProvider:
+        """
+        Get the provider instance based on LLM_PROVIDER setting.
+        """
+        provider_name = (settings.llm_provider or 'groq').strip().lower()
+        if provider_name == 'ollama':
+            return self.ollama_provider
+        elif provider_name == 'groq':
+            return self.groq_provider
+        else:
+            logger.warning(f"Unknown LLM_PROVIDER '{provider_name}'. Defaulting to Groq provider.")
+            return self.groq_provider
 
     def _build_static_fallback_review(self, language: str, static_analysis: dict[str, Any]) -> dict[str, Any]:
         issues = static_analysis.get('issues', []) if isinstance(static_analysis, dict) else []
         static_score = int(static_analysis.get('score', 70)) if isinstance(static_analysis, dict) else 70
         summary = static_analysis.get('summary', 'Static analysis review complete.') if isinstance(static_analysis, dict) else 'Static analysis review complete.'
+        provider_name = settings.llm_provider or 'groq'
 
         def match_issue(*keywords: str) -> list[dict[str, Any]]:
             lowered = [keyword.lower() for keyword in keywords]
@@ -45,7 +67,7 @@ class LLMService:
         suggested_fixes = [str(issue.get('message', 'Review and address the detected issue.')) for issue in issues[:10]]
 
         return {
-            'summary': f"{summary} (Ollama unavailable - static analysis fallback used)",
+            'summary': f"{summary} ({provider_name.capitalize()} unavailable - static analysis fallback used)",
             'overall_score': static_score,
             'score': static_score,
             'bugs': bugs,
@@ -55,7 +77,7 @@ class LLMService:
             'complexity_analysis': 'Complexity estimated from static analyzer findings. Run dedicated complexity tools (e.g., Radon) for exact metrics.',
             'best_practice_violations': best_practice_violations,
             'ai_explanations': [
-                f"Static analysis identified {len(issues)} issue(s). Start Ollama with model '{self.ollama_provider.model}' for deeper semantic AI review."
+                f"Static analysis identified {len(issues)} issue(s). Configure valid credentials/endpoint for provider '{provider_name}' for deeper semantic AI review."
             ],
             'suggested_fixes': suggested_fixes,
             'refactored_code': '',
@@ -73,14 +95,16 @@ class LLMService:
 
     async def get_active_provider(self) -> BaseAIProvider:
         """
-        Detects active provider. Returns Ollama if online, fallback if offline.
+        Detects active provider. Returns configured provider if available, fallback if unavailable.
         """
-        is_ollama_available = await self.ollama_provider.check_availability()
-        if is_ollama_available:
-            logger.info("Ollama provider detected and activated.")
-            return self.ollama_provider
+        provider = self.get_configured_provider()
+        provider_name = settings.llm_provider or 'groq'
+        is_available = await provider.check_availability()
+        if is_available:
+            logger.info(f"{provider_name.capitalize()} provider detected and activated.")
+            return provider
         else:
-            logger.warning("Ollama provider unreachable. Using fallback offline provider.")
+            logger.warning(f"{provider_name.capitalize()} provider unreachable or unavailable. Using fallback offline provider.")
             return self.fallback_provider
 
     async def chat(self, message: str) -> str:
@@ -95,7 +119,7 @@ class LLMService:
         try:
             return await provider.generate_response(message, system_prompt=system_prompt)
         except Exception as exc:
-            logger.error(f"Error in chat generation: {exc}. Retrying with fallback...")
+            logger.error(f"Error in chat generation with active provider: {exc}. Retrying with fallback...")
             return await self.fallback_provider.generate_response(message, system_prompt=system_prompt)
 
     async def review(
@@ -107,13 +131,13 @@ class LLMService:
         """
         Performs code review using the active provider, incorporating static findings.
         """
-        is_ollama_available = await self.ollama_provider.check_availability()
-        if is_ollama_available:
+        provider = await self.get_active_provider()
+        if provider != self.fallback_provider:
             try:
-                return await self.ollama_provider.review_code(code, language, static_analysis)
+                return await provider.review_code(code, language, static_analysis)
             except Exception as exc:
-                logger.error(f"Error in Ollama code review: {exc}. Using static analysis fallback.")
+                logger.error(f"Error in AI code review with provider {provider.__class__.__name__}: {exc}. Using static analysis fallback.")
                 return self._build_static_fallback_review(language, static_analysis)
 
-        logger.warning('Ollama unavailable for review. Using static analysis fallback output.')
+        logger.warning('Active AI provider unavailable for review. Using static analysis fallback output.')
         return self._build_static_fallback_review(language, static_analysis)

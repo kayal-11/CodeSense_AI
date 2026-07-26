@@ -21,10 +21,20 @@ app.include_router(chat.router, prefix='/chat', tags=['chat'])
 app.include_router(reports.router, prefix='/reports', tags=['reports'])
 
 
+import logging
+from config.settings import settings
+
+logger = logging.getLogger(__name__)
+
+
 @app.on_event('startup')
 def on_startup() -> None:
     verify_connection()
     init_db()
+    logger.info("=== CodeSense AI Startup Config ===")
+    logger.info("LLM_PROVIDER: %s", settings.llm_provider)
+    logger.info("GROQ_MODEL: %s", settings.groq_model)
+    logger.info("GROQ_API_KEY (masked): %s", settings.masked_groq_api_key)
 
 
 @app.get('/health')

@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
-import Editor from '@monaco-editor/react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import Editor, { type OnMount } from '@monaco-editor/react';
+import type { editor as MonacoEditor } from 'monaco-editor';
 import { motion } from 'framer-motion';
 import axios from 'axios';
 import { detectLanguage } from '../utils/languageDetection';
 import { deriveComplexity } from '../utils/complexityAnalysis';
-import { AlertTriangle, Bug, Copy, Download, Gauge, Lightbulb, ShieldAlert, Sparkles, Upload, Wrench } from 'lucide-react';
+import { Copy, Download, Upload } from 'lucide-react';
 
 const configuredApiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim();
 const API_BASE = configuredApiBase && configuredApiBase.length > 0 ? configuredApiBase.replace(/\/$/, '') : '/api';
@@ -245,6 +246,7 @@ interface ReviewResponse {
     level_2_guidance?: string[];
     level_3_optimized_solution?: {
       code?: string;
+      is_already_optimal?: boolean;
       explanations?: string[];
       complexity_improvements?: string[];
       best_practices?: string[];
@@ -253,8 +255,6 @@ interface ReviewResponse {
   code_hash?: string;
   cached?: boolean;
 }
-
-type BenefitType = 'Performance' | 'Security' | 'Maintainability' | 'Readability' | 'Best Practice';
 
 interface FindingCard {
   id: string;
@@ -266,15 +266,6 @@ interface FindingCard {
   whyItMatters: string;
   suggestedFix: string;
   improvedCode?: string;
-}
-
-interface OptimizationTip {
-  id: string;
-  title: string;
-  benefit: BenefitType;
-  description: string;
-  expectedBenefit: string;
-  severity: 'high' | 'medium' | 'low';
 }
 
 const severityRank: Record<string, number> = {
@@ -404,117 +395,17 @@ const extractFindingsFromTextList = (items: string[], prefix: string): FindingCa
   return cards;
 };
 
-const categoryIcon = (category: string) => {
-  const categoryText = category.toLowerCase();
-  if (categoryText.includes('security')) return ShieldAlert;
-  if (categoryText.includes('performance') || categoryText.includes('complexity')) return Gauge;
-  if (categoryText.includes('bug')) return Bug;
-  if (categoryText.includes('practice') || categoryText.includes('smell')) return Wrench;
-  return AlertTriangle;
-};
-
-const getBenefitStyle = (benefit: BenefitType): string => {
-  if (benefit === 'Security') return 'border-red-500/30 bg-red-500/10 text-red-300';
-  if (benefit === 'Performance') return 'border-cyan-500/30 bg-cyan-500/10 text-cyan-300';
-  if (benefit === 'Maintainability') return 'border-amber-500/30 bg-amber-500/10 text-amber-300';
-  if (benefit === 'Readability') return 'border-indigo-500/30 bg-indigo-500/10 text-indigo-300';
-  return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300';
-};
-
-const generateOptimizationTips = (sourceCode: string, lang: string, findings: FindingCard[]): OptimizationTip[] => {
-  const code = sourceCode.toLowerCase();
-  const tips: OptimizationTip[] = [];
-
-  const hasSecurityFinding = findings.some((f) => f.category.toLowerCase().includes('security'));
-  const hasPerformanceFinding = findings.some((f) => f.category.toLowerCase().includes('performance') || f.description.toLowerCase().includes('o(n'));
-  const hasBroadException = /except\s*:\s*|except\s+exception\s*:/i.test(sourceCode);
-  const hasNestedLoop = /for\s+.+:\s*\n[\s\S]{0,120}for\s+.+:/i.test(sourceCode) || /for\s*\(.+\)\s*\{[\s\S]{0,120}for\s*\(/i.test(sourceCode);
-  const hasStringConcatLoop = /(for\s+.+:\s*[\s\S]{0,160}\+=\s*['\"])/i.test(sourceCode);
-  const hasSqlInterpolation = /(select|insert|update|delete)[\s\S]{0,120}(\{|%s|\+\s*\w+)/i.test(code);
-  const hasArrayMembershipLoop = lang === 'python' && /for\s+.+:\s*[\s\S]{0,120}\sin\s+\w+/i.test(sourceCode) && /\blist\b|\[.*\]/i.test(sourceCode);
-
-  if (hasSqlInterpolation || hasSecurityFinding) {
-    tips.push({
-      id: 'tip-sec-queries',
-      title: 'Use parameterized queries for all database access',
-      benefit: 'Security',
-      description: 'String interpolation in SQL-like statements can allow injection vulnerabilities and unsafe query execution.',
-      expectedBenefit: 'Prevents SQL injection risk and improves query safety across user inputs.',
-      severity: 'high',
-    });
+const severityBadgeClass = (severity: string): string => {
+  switch (severity.toLowerCase()) {
+    case 'critical':
+      return 'border-red-500/40 bg-red-500/15 text-red-200';
+    case 'high':
+      return 'border-orange-500/40 bg-orange-500/15 text-orange-200';
+    case 'medium':
+      return 'border-amber-500/40 bg-amber-500/15 text-amber-200';
+    default:
+      return 'border-blue-500/40 bg-blue-500/15 text-blue-200';
   }
-
-  if (hasNestedLoop || hasPerformanceFinding) {
-    tips.push({
-      id: 'tip-perf-lookup',
-      title: 'Replace nested lookups with hash-based structures',
-      benefit: 'Performance',
-      description: 'Detected looping patterns that can grow quadratically for larger inputs.',
-      expectedBenefit: 'Can reduce time complexity from O(n^2) to O(n) for membership and join-like operations.',
-      severity: 'medium',
-    });
-  }
-
-  if (hasArrayMembershipLoop) {
-    tips.push({
-      id: 'tip-perf-set',
-      title: 'Use set for frequent membership checks in Python',
-      benefit: 'Performance',
-      description: 'Membership checks against list structures are linear and can become expensive inside loops.',
-      expectedBenefit: 'Using set enables near-constant-time lookup and faster execution on large datasets.',
-      severity: 'medium',
-    });
-  }
-
-  if (hasStringConcatLoop) {
-    tips.push({
-      id: 'tip-readability-string-builder',
-      title: 'Avoid repeated string concatenation inside loops',
-      benefit: 'Readability',
-      description: 'Repeated concatenation can increase allocation overhead and makes intent less explicit.',
-      expectedBenefit: 'Use list join (Python) or builder-style patterns for cleaner and more efficient output assembly.',
-      severity: 'low',
-    });
-  }
-
-  if (hasBroadException) {
-    tips.push({
-      id: 'tip-maintainability-exceptions',
-      title: 'Handle specific exception types',
-      benefit: 'Maintainability',
-      description: 'Broad exception handling can hide real failures and makes debugging harder.',
-      expectedBenefit: 'Improves reliability and observability by preserving meaningful failure paths.',
-      severity: 'medium',
-    });
-  }
-
-  if (lang === 'javascript' || lang === 'typescript') {
-    if (/\bvar\s+/.test(sourceCode)) {
-      tips.push({
-        id: 'tip-bestpractice-js-var',
-        title: 'Prefer const/let over var',
-        benefit: 'Best Practice',
-        description: 'Function-scoped var can lead to hoisting confusion and accidental reassignments.',
-        expectedBenefit: 'Improves scope clarity and reduces side effects in modern JavaScript/TypeScript.',
-        severity: 'low',
-      });
-    }
-  }
-
-  if (lang === 'python') {
-    if (!/def\s+\w+\(.*\)\s*->/.test(sourceCode)) {
-      tips.push({
-        id: 'tip-bestpractice-py-types',
-        title: 'Add type hints for public functions',
-        benefit: 'Best Practice',
-        description: 'Function signatures without type hints reduce static tooling effectiveness.',
-        expectedBenefit: 'Improves readability, editor assistance, and early error detection.',
-        severity: 'low',
-      });
-    }
-  }
-
-  return tips.slice(0, 6);
 };
 
 const stableCodeHash = (value: string): string => {
@@ -533,6 +424,156 @@ const normalizedSeverityBreakdown = (breakdown?: Record<string, number>): Record
   low: breakdown?.low ?? 0,
 });
 
+interface AuditSummaryFields {
+  score: string;
+  correctness: string;
+  complexity: string;
+  security: string;
+  verdict: string;
+}
+
+const oneLineText = (value: string, maxLength = 140): string => {
+  const compact = value.replace(/\s+/g, ' ').trim();
+  if (compact.length <= maxLength) return compact;
+  return `${compact.slice(0, maxLength - 1)}…`;
+};
+
+const unescapeCode = (raw: string): string => {
+  if (!raw) return '';
+  let text = raw.trim();
+  if (text.startsWith('```')) {
+    const firstNewline = text.indexOf('\n');
+    if (firstNewline !== -1) text = text.slice(firstNewline + 1);
+    if (text.endsWith('```')) text = text.slice(0, -3);
+    text = text.trim();
+  }
+  if (text.includes('\\n') && text.split('\n').length <= 2) {
+    text = text.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\"/g, '"').replace(/\\'/g, "'");
+  }
+  return text;
+};
+
+const parseAuditSummary = (
+  summaryText: string,
+  scoreValue: number | null,
+  complexityAnalysis: string,
+  findings: FindingCard[],
+  sourceCode: string
+): AuditSummaryFields => {
+  const extract = (pattern: RegExp): string => {
+    const match = summaryText.match(pattern);
+    return match?.[1]?.replace(/\*\*/g, '').trim() || '';
+  };
+
+  const score =
+    extract(/🏆\s*\*?\*?Score:\*?\*?\s*([^\n]+)/i) ||
+    extract(/Score:\*?\*?\s*([^\n]+)/i) ||
+    (scoreValue !== null ? `${scoreValue}/100` : 'Pending');
+
+  const correctness =
+    extract(/✅\s*\*?\*?Correctness:\*?\*?\s*([^\n]+)/i) ||
+    extract(/Correctness:\*?\*?\s*([^\n]+)/i) ||
+    'Review required';
+
+  const derived = deriveComplexity(sourceCode);
+  const complexity =
+    extract(/⚡\s*\*?\*?(?:Time\s*&\s*Space\s*)?Complexity:\*?\*?\s*([^\n]+)/i) ||
+    extract(/Complexity:\*?\*?\s*([^\n]+)/i) ||
+    complexityAnalysis ||
+    `${derived.time} | ${derived.space}`;
+
+  const securityIssueCount = findings.filter((finding) => finding.category.toLowerCase().includes('security')).length;
+  const security =
+    extract(/🛡️\s*\*?\*?Security:\*?\*?\s*([^\n]+)/i) ||
+    extract(/Security:\*?\*?\s*([^\n]+)/i) ||
+    (securityIssueCount === 0 ? 'No issues detected' : `${securityIssueCount} issue(s) found`);
+
+  const verdict =
+    extract(/🚀\s*\*?\*?Verdict:\*?\*?\s*([^\n]+)/i) ||
+    extract(/Verdict:\*?\*?\s*([^\n]+)/i) ||
+    oneLineText(summaryText.split('\n').filter((line) => line.trim()).slice(-1)[0] || 'Analysis complete.');
+
+  return { score, correctness, complexity, security, verdict };
+};
+
+const formatLineLabel = (lineNumber: number | null): string => {
+  if (!lineNumber) return '—';
+  return `Line ${lineNumber}`;
+};
+
+const suggestionKey = (finding: FindingCard): string =>
+  `${finding.severity}|${finding.lineNumber ?? 0}|${finding.title}|${finding.description}`.toLowerCase();
+
+const DEFAULT_SUGGESTED_FIX = 'Refactor the affected line and add a focused test to verify the improvement.';
+const SEVERITY_GROUP_ORDER = ['critical', 'high', 'medium', 'low'] as const;
+
+const isActionableSuggestion = (finding: FindingCard): boolean => {
+  const combined = `${finding.title} ${finding.description} ${finding.suggestedFix}`.trim();
+  if (!combined || combined.length < 4) return false;
+
+  const lower = combined.toLowerCase();
+  const blockedPhrases = [
+    'groq ai model',
+    'groq review complete',
+    'review complete with score',
+    'static analysis review complete',
+    'provider unavailable',
+    'fallback analyzer',
+    're-run analysis when provider',
+    'temporarily limited',
+  ];
+  if (blockedPhrases.some((phrase) => lower.includes(phrase))) return false;
+
+  if (
+    finding.category.toLowerCase() === 'ai suggestion' &&
+    finding.title.toLowerCase() === 'ai suggestion' &&
+    !finding.lineNumber &&
+    finding.description === finding.suggestedFix
+  ) {
+    return false;
+  }
+
+  return true;
+};
+
+const suggestionBulletText = (finding: FindingCard): string => {
+  const fix = oneLineText(finding.suggestedFix, 110);
+  const issue = oneLineText(finding.description || finding.title, 110);
+  if (fix && fix !== DEFAULT_SUGGESTED_FIX && fix !== issue) return fix;
+  return issue;
+};
+
+const severityEmoji = (severity: string): string => {
+  switch (severity.toLowerCase()) {
+    case 'critical':
+      return '🔴';
+    case 'high':
+      return '🟠';
+    case 'medium':
+      return '🟡';
+    default:
+      return '🟢';
+  }
+};
+
+const computeModifiedLines = (original: string, optimized: string): number[] => {
+  if (!optimized.trim()) return [];
+  const origLines = original.split('\n');
+  const optLines = optimized.split('\n');
+  const maxLen = Math.max(origLines.length, optLines.length);
+  const changed: number[] = [];
+  for (let i = 0; i < maxLen; i += 1) {
+    if ((origLines[i] ?? '').trim() !== (optLines[i] ?? '').trim()) {
+      changed.push(i + 1);
+    }
+  }
+  return changed;
+};
+
+const EDITOR_LINE_HEIGHT_PX = 20;
+const EDITOR_VISIBLE_LINES = 22;
+const EDITOR_BODY_HEIGHT = EDITOR_LINE_HEIGHT_PX * EDITOR_VISIBLE_LINES;
+
 const ReviewPage = () => {
   const [code, setCode] = useState(LANGUAGE_TEMPLATES[DEFAULT_LANGUAGE].sampleCode);
   const [fileNameHint, setFileNameHint] = useState(LANGUAGE_TEMPLATES[DEFAULT_LANGUAGE].fileName);
@@ -543,7 +584,6 @@ const ReviewPage = () => {
   const [autoDetectEnabled, setAutoDetectEnabled] = useState(true);
   const [summary, setSummary] = useState('Review ready to run.');
   const [findings, setFindings] = useState<FindingCard[]>([]);
-  const [optimizationTips, setOptimizationTips] = useState<OptimizationTip[]>([]);
   const [score, setScore] = useState<number | null>(null);
   const [severityBreakdown, setSeverityBreakdown] = useState<Record<string, number>>({ critical: 0, high: 0, medium: 0, low: 0 });
   const [analysisHash, setAnalysisHash] = useState('');
@@ -555,7 +595,18 @@ const ReviewPage = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copySuccess, setCopySuccess] = useState(false);
+  const [copyCodeSuccess, setCopyCodeSuccess] = useState(false);
+  const [activeLine, setActiveLine] = useState<number | null>(null);
+  const [editorWidthPct, setEditorWidthPct] = useState(68);
+  const [splitterDragging, setSplitterDragging] = useState(false);
+  const [isWideLayout, setIsWideLayout] = useState(() => typeof window !== 'undefined' && window.innerWidth >= 1280);
   const localAnalysisCache = useRef<Map<string, ReviewResponse>>(new Map());
+  const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null);
+  const monacoRef = useRef<typeof import('monaco-editor') | null>(null);
+  const decorationIdsRef = useRef<string[]>([]);
+  const splitContainerRef = useRef<HTMLDivElement | null>(null);
+  const cursorPositionRef = useRef<{ lineNumber: number; column: number } | null>(null);
+  const splitterDraggingRef = useRef(false);
 
   const languageOptions = useMemo(
     () => [
@@ -594,6 +645,50 @@ const ReviewPage = () => {
       setLanguage(autoLanguage);
     }
   }, [autoDetectEnabled, code, fileNameHint, language, supportedLanguages]);
+
+  useEffect(() => {
+    const onResize = () => setIsWideLayout(window.innerWidth >= 1280);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  useEffect(() => {
+    const onMouseMove = (event: MouseEvent) => {
+      if (!splitterDraggingRef.current || !splitContainerRef.current) return;
+      const rect = splitContainerRef.current.getBoundingClientRect();
+      const nextPct = ((event.clientX - rect.left) / rect.width) * 100;
+      setEditorWidthPct(Math.min(72, Math.max(62, nextPct)));
+    };
+    const onMouseUp = () => {
+      splitterDraggingRef.current = false;
+      setSplitterDragging(false);
+    };
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+  }, []);
+
+  const saveEditorCursor = useCallback(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const position = editor.getPosition();
+    if (position) {
+      cursorPositionRef.current = { lineNumber: position.lineNumber, column: position.column };
+    }
+  }, []);
+
+  const restoreEditorCursor = useCallback(() => {
+    const editor = editorRef.current;
+    const saved = cursorPositionRef.current;
+    if (!editor || !saved) return;
+    requestAnimationFrame(() => {
+      editor.setPosition(saved);
+      editor.revealLineInCenter(saved.lineNumber);
+    });
+  }, []);
 
   const applyReviewPayload = (payload: ReviewResponse, options?: { fromCache?: boolean; localHash?: string }) => {
     const mergedScore = payload.overall_score ?? payload.score ?? null;
@@ -640,7 +735,8 @@ const ReviewPage = () => {
     });
 
     setFindings(mergedFindings);
-    setOptimizationTips(generateOptimizationTips(code, language, mergedFindings));
+    setActiveLine(null);
+    restoreEditorCursor();
   };
 
   const handleFileUpload = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -694,6 +790,7 @@ const ReviewPage = () => {
   const handleReview = async () => {
     setLoading(true);
     setError(null);
+    saveEditorCursor();
 
     const sourceHash = stableCodeHash(code);
     const cacheKey = `${sourceHash}:${language}:standard-v1`;
@@ -727,7 +824,6 @@ const ReviewPage = () => {
       }
       setSummary('An error occurred during analysis.');
       setFindings([]);
-      setOptimizationTips([]);
     } finally {
       setLoading(false);
     }
@@ -745,16 +841,113 @@ const ReviewPage = () => {
     }
   };
 
-  const optimizedCodeForLevel3 =
-    learningAssistant?.level_3_optimized_solution?.code?.trim() ||
-    refactoredCode.trim() ||
-    code;
+  const auditSummary = useMemo(
+    () => parseAuditSummary(summary, score, complexityAnalysis, findings, code),
+    [summary, score, complexityAnalysis, findings, code]
+  );
 
-  const level3Explanation = learningAssistant?.level_3_optimized_solution?.explanations || [];
-  const level3Complexity = learningAssistant?.level_3_optimized_solution?.complexity_improvements || [];
-  const level3BestPractices = learningAssistant?.level_3_optimized_solution?.best_practices || [];
-  const originalComplexity = useMemo(() => deriveComplexity(code, language), [code, language]);
-  const optimizedComplexity = useMemo(() => deriveComplexity(optimizedCodeForLevel3, language), [optimizedCodeForLevel3, language]);
+  const aiSuggestions = useMemo(() => {
+    const deduped = new Map<string, FindingCard>();
+    findings.forEach((finding) => {
+      if (!isActionableSuggestion(finding)) return;
+      const key = suggestionKey(finding);
+      if (!deduped.has(key)) deduped.set(key, finding);
+    });
+    return Array.from(deduped.values()).sort((a, b) => {
+      const severityDiff = (severityRank[b.severity] || 0) - (severityRank[a.severity] || 0);
+      if (severityDiff !== 0) return severityDiff;
+      return (a.lineNumber ?? Number.MAX_SAFE_INTEGER) - (b.lineNumber ?? Number.MAX_SAFE_INTEGER);
+    });
+  }, [findings]);
+
+  const groupedSuggestions = useMemo(() => {
+    const groups = new Map<string, FindingCard[]>();
+    aiSuggestions.forEach((finding) => {
+      const severity = finding.severity.toLowerCase();
+      const bucket = groups.get(severity) ?? [];
+      bucket.push(finding);
+      groups.set(severity, bucket);
+    });
+    return SEVERITY_GROUP_ORDER.filter((severity) => groups.has(severity)).map((severity) => ({
+      severity,
+      items: groups.get(severity) ?? [],
+    }));
+  }, [aiSuggestions]);
+
+  const affectedLines = useMemo(
+    () => [...new Set(aiSuggestions.map((finding) => finding.lineNumber).filter((line): line is number => Boolean(line)))],
+    [aiSuggestions]
+  );
+
+  const optimizedCodeForLevel3 = useMemo(() => {
+    const raw =
+      learningAssistant?.level_3_optimized_solution?.code?.trim() ||
+      refactoredCode.trim();
+    return unescapeCode(raw);
+  }, [learningAssistant, refactoredCode]);
+
+  const isAlreadyOptimal = useMemo(() => {
+    if (learningAssistant?.level_3_optimized_solution?.is_already_optimal) return true;
+    if (!optimizedCodeForLevel3) return true;
+    return optimizedCodeForLevel3.trim() === code.trim();
+  }, [learningAssistant, optimizedCodeForLevel3, code]);
+
+  const modifiedLines = useMemo(
+    () => (isAlreadyOptimal ? [] : computeModifiedLines(code, optimizedCodeForLevel3)),
+    [code, optimizedCodeForLevel3, isAlreadyOptimal]
+  );
+
+  const handleEditorMount: OnMount = useCallback((editor, monaco) => {
+    editorRef.current = editor;
+    monacoRef.current = monaco;
+  }, []);
+
+  const scrollToLine = useCallback((lineNumber: number | null) => {
+    if (!lineNumber || !editorRef.current || !monacoRef.current) return;
+    setActiveLine(lineNumber);
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    editor.revealLineInCenter(lineNumber);
+    editor.setSelection(new monaco.Selection(lineNumber, 1, lineNumber, 1));
+    editor.focus();
+  }, []);
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    if (!editor || !monaco) return;
+
+    const suggestionDecorations = affectedLines.map((lineNumber) => ({
+      range: new monaco.Range(lineNumber, 1, lineNumber, 1),
+      options: {
+        isWholeLine: true,
+        className: lineNumber === activeLine ? 'monaco-finding-highlight-active' : 'monaco-finding-highlight',
+        overviewRuler: {
+          color: lineNumber === activeLine ? '#f87171' : '#fb7185',
+          position: monaco.editor.OverviewRulerLane.Full,
+        },
+      },
+    }));
+
+    const optimizedDecorations = modifiedLines
+      .filter((lineNumber) => !affectedLines.includes(lineNumber))
+      .map((lineNumber) => ({
+        range: new monaco.Range(lineNumber, 1, lineNumber, 1),
+        options: {
+          isWholeLine: true,
+          className: 'monaco-optimized-highlight',
+          overviewRuler: {
+            color: '#38bdf8',
+            position: monaco.editor.OverviewRulerLane.Center,
+          },
+        },
+      }));
+
+    decorationIdsRef.current = editor.deltaDecorations(decorationIdsRef.current, [
+      ...suggestionDecorations,
+      ...optimizedDecorations,
+    ]);
+  }, [affectedLines, activeLine, modifiedLines, code]);
 
   const handleCopyOptimizedCode = async () => {
     try {
@@ -764,6 +957,29 @@ const ReviewPage = () => {
     } catch {
       setCopySuccess(false);
     }
+  };
+
+  const handleCopyCode = async () => {
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopyCodeSuccess(true);
+      window.setTimeout(() => setCopyCodeSuccess(false), 1200);
+    } catch {
+      setCopyCodeSuccess(false);
+    }
+  };
+
+  const handleDownloadCode = () => {
+    const template = templateForLanguage(language);
+    const blob = new Blob([code], { type: 'text/plain;charset=utf-8' });
+    const objectUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = objectUrl;
+    anchor.download = fileNameHint || template.fileName;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(objectUrl);
   };
 
   const handleDownloadOptimizedCode = () => {
@@ -799,11 +1015,11 @@ const ReviewPage = () => {
         </button>
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[1.3fr_0.7fr]">
+      <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr] xl:items-start">
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
-          className="rounded-3xl border border-slate-800 bg-slate-900/80 p-4 shadow-glow"
+          className="rounded-2xl border border-slate-800 bg-slate-900/80 p-3 shadow-glow lg:p-4"
         >
           <div className="mb-3 flex items-center justify-between">
             <h2 className="text-lg font-semibold text-white">Editor</h2>
@@ -861,13 +1077,21 @@ const ReviewPage = () => {
             </label>
             <p className="text-[11px] text-slate-400">Extension is checked first, then syntax is validated for confidence.</p>
           </div>
-          <div className="h-[420px] overflow-hidden rounded-2xl border border-slate-800">
+          <div className="h-[min(420px,42vh)] min-h-[280px] overflow-hidden rounded-xl border border-slate-800">
             <Editor
               theme="vs-dark"
-              language={language}
+              language={language === 'plaintext' ? 'plaintext' : language}
               value={code}
               onChange={(value) => setCode(value ?? '')}
-              options={{ minimap: { enabled: false } }}
+              onMount={handleEditorMount}
+              options={{
+                minimap: { enabled: false },
+                scrollBeyondLastLine: false,
+                fontSize: 13,
+                lineNumbersMinChars: 3,
+                glyphMargin: true,
+                renderLineHighlight: 'all',
+              }}
             />
           </div>
         </motion.div>
@@ -875,289 +1099,166 @@ const ReviewPage = () => {
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
-          className="rounded-3xl border border-slate-800 bg-slate-900/80 p-6 shadow-glow flex flex-col h-full"
+          className="rounded-2xl border border-slate-800 bg-slate-900/80 p-3 shadow-glow flex flex-col lg:p-4 max-h-[min(720px,calc(100vh-9rem))]"
         >
-          <div className="flex items-center justify-between border-b border-slate-800 pb-4 mb-4">
-            <h2 className="text-xl font-semibold text-white">Findings</h2>
-            <div className="flex flex-wrap items-center justify-end gap-2">
-              {score !== null && (
-                <span
-                  className={`px-3 py-1 rounded-full text-xs font-bold ${
-                    score >= 90
-                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                      : score >= 70
-                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                      : 'bg-red-500/20 text-red-300 border border-red-500/30'
-                  }`}
-                >
-                  Overall Score: {score}/100
-                </span>
-              )}
-              {analysisHash && <span className="rounded-full border border-slate-700 px-3 py-1 text-[10px] uppercase tracking-wider text-slate-300">Hash {analysisHash.slice(0, 8)}</span>}
-              {wasCached && <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-[10px] uppercase tracking-wider text-emerald-300">Cached Result</span>}
+          <div className="flex items-center justify-between border-b border-slate-800 pb-3 mb-3 shrink-0">
+            <h2 className="text-lg font-semibold text-white">AI Review</h2>
+            <div className="flex flex-wrap items-center justify-end gap-1.5">
+              {analysisHash && <span className="rounded-full border border-slate-700 px-2 py-0.5 text-[10px] uppercase tracking-wider text-slate-300">Hash {analysisHash.slice(0, 8)}</span>}
+              {wasCached && <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-emerald-300">Cached</span>}
             </div>
           </div>
 
-          <div className="mb-4 grid grid-cols-2 gap-2 text-xs md:grid-cols-4">
-            <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-red-200">Critical: <span className="font-semibold">{severityBreakdown.critical ?? 0}</span></div>
-            <div className="rounded-xl border border-orange-500/30 bg-orange-500/10 px-3 py-2 text-orange-200">High: <span className="font-semibold">{severityBreakdown.high ?? 0}</span></div>
-            <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-amber-200">Medium: <span className="font-semibold">{severityBreakdown.medium ?? 0}</span></div>
-            <div className="rounded-xl border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-blue-200">Low: <span className="font-semibold">{severityBreakdown.low ?? 0}</span></div>
+          {/* 1. Findings */}
+          <div className="mb-3 shrink-0">
+            <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Findings</p>
+            <div className="grid grid-cols-2 gap-1.5 text-[11px] sm:grid-cols-4">
+              <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-2 py-1.5 text-red-200">Critical <span className="float-right font-semibold">{severityBreakdown.critical ?? 0}</span></div>
+              <div className="rounded-lg border border-orange-500/30 bg-orange-500/10 px-2 py-1.5 text-orange-200">High <span className="float-right font-semibold">{severityBreakdown.high ?? 0}</span></div>
+              <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-amber-200">Medium <span className="float-right font-semibold">{severityBreakdown.medium ?? 0}</span></div>
+              <div className="rounded-lg border border-blue-500/30 bg-blue-500/10 px-2 py-1.5 text-blue-200">Low <span className="float-right font-semibold">{severityBreakdown.low ?? 0}</span></div>
+            </div>
           </div>
 
-          <div className="flex-1 space-y-4 overflow-y-auto max-h-[380px] pr-1">
+          <div className="flex-1 space-y-3 overflow-y-auto pr-1 min-h-0">
             {error && (
-              <div className="rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-300">
+              <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-xs text-red-300">
                 {error}
               </div>
             )}
 
-            <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
-              <p className="text-xs uppercase tracking-wider text-slate-400 font-semibold mb-2">Summary</p>
-              <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-line">{summary}</p>
-            </div>
-
             {loading ? (
-              <div className="py-8 text-center text-sm text-slate-400 italic flex flex-col items-center justify-center gap-3">
-                <div className="h-8 w-8 animate-spin rounded-full border-2 border-cyan-500 border-t-transparent"></div>
-                Analyzing code structures...
+              <div className="py-10 text-center text-sm text-slate-400 italic flex flex-col items-center justify-center gap-2">
+                <div className="h-7 w-7 animate-spin rounded-full border-2 border-cyan-500 border-t-transparent" />
+                Evaluating code quality with Groq AI...
               </div>
-            ) : findings.length > 0 ? (
-              findings.map((finding) => {
-                const Icon = categoryIcon(finding.category);
-                return (
-                  <div key={finding.id} className={`rounded-2xl border p-4 transition duration-200 hover:scale-[1.01] ${getSeverityStyles(finding.severity)}`}>
-                    <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-                      <div className="flex items-center gap-2">
-                        <Icon className="h-4 w-4" />
-                        <span className="text-xs uppercase tracking-wider font-bold">{finding.category}</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className="rounded-full border border-white/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider">
-                          {severityDisplay(finding.severity)}
-                        </span>
-                        <span className="text-xs text-slate-400">{finding.lineNumber ? `Line ${finding.lineNumber}` : 'Line N/A'}</span>
-                      </div>
-                    </div>
-
-                    <h3 className="text-sm font-semibold text-white">{finding.title}</h3>
-                    <p className="mt-1 text-sm leading-relaxed text-slate-300">{finding.description}</p>
-
-                    <div className="mt-3 rounded-xl border border-white/10 bg-black/10 p-3">
-                      <p className="text-[11px] uppercase tracking-wider text-slate-400">Why it matters</p>
-                      <p className="mt-1 text-xs text-slate-200 leading-relaxed">{finding.whyItMatters}</p>
-                    </div>
-
-                    <div className="mt-3 rounded-xl border border-white/10 bg-black/10 p-3">
-                      <p className="text-[11px] uppercase tracking-wider text-slate-400">Suggested Fix</p>
-                      <p className="mt-1 text-xs text-slate-200 leading-relaxed">{finding.suggestedFix}</p>
-                    </div>
-
-                    {finding.improvedCode && (
-                      <div className="mt-3 rounded-xl border border-white/10 bg-black/20 p-3">
-                        <p className="text-[11px] uppercase tracking-wider text-slate-400">Improved Code</p>
-                        <pre className="mt-1 text-xs text-slate-200 whitespace-pre-wrap overflow-x-auto">{finding.improvedCode}</pre>
-                      </div>
-                    )}
-                  </div>
-                );
-              })
             ) : (
-              !loading &&
-              score !== null && (
-                <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 p-4 text-center">
-                  <p className="text-sm font-semibold text-emerald-300">No issues found!</p>
-                  <p className="mt-1 text-xs text-slate-400">Your code follows security and code-quality heuristics.</p>
+              <>
+                {/* 2. Audit Report Summary */}
+                <div className="rounded-xl border border-slate-800 bg-slate-950/80 p-3 space-y-1">
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-1">Audit Report Summary</p>
+                  <p className="text-xs text-slate-200 leading-snug">🏆 Score: <span className="text-white font-medium">{auditSummary.score}</span></p>
+                  <p className="text-xs text-slate-200 leading-snug">✅ Correctness: <span className="text-white font-medium">{auditSummary.correctness}</span></p>
+                  <p className="text-xs text-slate-200 leading-snug">⚡ Time &amp; Space Complexity: <span className="text-white font-medium">{auditSummary.complexity}</span></p>
+                  <p className="text-xs text-slate-200 leading-snug">🛡️ Security: <span className="text-white font-medium">{auditSummary.security}</span></p>
+                  <p className="text-xs text-slate-200 leading-snug">🚀 Verdict: <span className="text-white font-medium">{oneLineText(auditSummary.verdict, 160)}</span></p>
                 </div>
-              )
-            )}
 
-            {optimizationTips.length > 0 && (
-              <div className="rounded-2xl border border-violet-500/20 bg-violet-500/10 p-4">
-                <div className="mb-3 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Sparkles className="h-4 w-4 text-violet-300" />
-                    <p className="text-xs uppercase tracking-wider text-violet-300 font-semibold">AI Optimization Tips</p>
+                {/* 3. AI Suggestions */}
+                <div className="rounded-xl border border-slate-800 bg-slate-950/80 p-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-2">AI Suggestions</p>
+                  {aiSuggestions.length === 0 ? (
+                    <p className="text-xs text-emerald-300">✅ No actionable suggestions. Code looks clean.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {aiSuggestions.map((finding) => (
+                        <button
+                          key={finding.id}
+                          type="button"
+                          onClick={() => scrollToLine(finding.lineNumber)}
+                          className={`w-full rounded-lg border p-2.5 text-left transition hover:border-cyan-500/40 ${getSeverityStyles(finding.severity)} ${
+                            finding.lineNumber === activeLine ? 'ring-1 ring-cyan-400/60' : ''
+                          }`}
+                        >
+                          <div className="flex flex-wrap items-center gap-2 mb-1">
+                            <span className={`rounded border px-1.5 py-0.5 text-[10px] font-bold uppercase ${severityBadgeClass(finding.severity)}`}>
+                              {severityDisplay(finding.severity)}
+                            </span>
+                            <span className="text-[10px] text-slate-400">{formatLineLabel(finding.lineNumber)}</span>
+                          </div>
+                          <p className="text-xs text-slate-100 leading-snug"><span className="text-slate-400">Issue:</span> {oneLineText(finding.description || finding.title)}</p>
+                          <p className="text-xs text-slate-300 leading-snug mt-0.5"><span className="text-slate-400">Fix:</span> {oneLineText(finding.suggestedFix)}</p>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* 4. 3-Level Learning Assistant */}
+                <div className="rounded-xl border border-cyan-500/25 bg-slate-950/80 p-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-2">3-Level Learning Assistant</p>
+                  <div className="flex gap-1 mb-2">
+                    {([
+                      { level: 1 as const, label: '🟢 Level 1', tone: 'border-emerald-500/40 text-emerald-300' },
+                      { level: 2 as const, label: '🟡 Level 2', tone: 'border-amber-500/40 text-amber-300' },
+                      { level: 3 as const, label: '🔴 Level 3', tone: 'border-rose-500/40 text-rose-300' },
+                    ]).map(({ level, label, tone }) => (
+                      <button
+                        key={level}
+                        type="button"
+                        onClick={() => setAssistantViewLevel(level)}
+                        className={`flex-1 rounded-lg border px-2 py-1.5 text-[10px] font-semibold transition ${
+                          assistantViewLevel === level ? `${tone} bg-slate-900` : 'border-slate-700 text-slate-400 hover:border-slate-500'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
                   </div>
-                  <span className="text-[10px] text-violet-200/80">Context-aware recommendations</span>
-                </div>
 
-                <div className="space-y-3">
-                  {optimizationTips.map((tip) => (
-                    <div key={tip.id} className="rounded-xl border border-violet-300/20 bg-slate-950/70 p-3">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <h3 className="text-sm font-semibold text-white flex items-center gap-2">
-                          <Lightbulb className="h-4 w-4 text-violet-300" />
-                          {tip.title}
-                        </h3>
-                        <div className="flex items-center gap-2">
-                          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${getBenefitStyle(tip.benefit)}`}>
-                            {tip.benefit}
-                          </span>
-                          <span className="rounded-full border border-slate-600 px-2 py-0.5 text-[10px] uppercase tracking-wider text-slate-300">
-                            {severityDisplay(tip.severity)}
-                          </span>
+                  {assistantViewLevel === 1 && (
+                    <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-2.5 text-xs text-slate-200 leading-relaxed">
+                      {learningAssistant?.level_1_hint?.[0] || 'Check collection lookups and boundary checks.'}
+                    </div>
+                  )}
+
+                  {assistantViewLevel === 2 && (
+                    <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-2.5 text-xs text-slate-200 leading-relaxed">
+                      {learningAssistant?.level_2_guidance?.[0] || 'Single-pass traversal using an auxiliary hash map.'}
+                    </div>
+                  )}
+
+                  {assistantViewLevel === 3 && (
+                    <div className="space-y-2">
+                      {isAlreadyOptimal ? (
+                        <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/10 p-3 text-center text-xs font-medium text-emerald-300">
+                          ✅ Current solution is already optimal.
                         </div>
-                      </div>
-                      <p className="mt-2 text-xs text-slate-300 leading-relaxed">{tip.description}</p>
-                      <div className="mt-2 rounded-lg border border-slate-700/70 bg-slate-900/60 p-2">
-                        <p className="text-[11px] uppercase tracking-wider text-slate-400">Expected benefit</p>
-                        <p className="text-xs text-slate-200 leading-relaxed">{tip.expectedBenefit}</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <div className="rounded-2xl border border-cyan-500/20 bg-cyan-500/10 p-4">
-              <div className="mb-3 flex items-center justify-between">
-                <p className="text-xs uppercase tracking-wider text-cyan-300 font-semibold">3-Level Learning Assistant</p>
-                <div className="flex items-center gap-2">
-                  {[1, 2, 3].map((level) => (
-                    <button
-                      key={`assistant-level-${level}`}
-                      type="button"
-                      onClick={() => setAssistantViewLevel(level as 1 | 2 | 3)}
-                      className={`rounded-full border px-3 py-1 text-[11px] font-semibold transition ${
-                        assistantViewLevel === level
-                          ? 'border-cyan-300 bg-cyan-100 text-slate-900'
-                          : 'border-cyan-500/30 bg-transparent text-cyan-200 hover:border-cyan-300'
-                      }`}
-                    >
-                      Level {level}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {assistantViewLevel === 1 && (
-                <div className="space-y-2">
-                  <p className="text-sm text-cyan-100">Hint: small nudges without revealing the full solution.</p>
-                  {(learningAssistant?.level_1_hint || ['Run analysis to generate learning hints.']).map((item, idx) => (
-                    <div key={`hint-${idx}`} className="rounded-xl border border-cyan-300/20 bg-slate-950/70 p-3 text-xs text-slate-200">
-                      {item}
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {assistantViewLevel === 2 && (
-                <div className="space-y-2">
-                  <p className="text-sm text-cyan-100">Guidance: issue explanation and optimization suggestions.</p>
-                  {(learningAssistant?.level_2_guidance || ['Run analysis to generate guidance.']).map((item, idx) => (
-                    <div key={`guidance-${idx}`} className="rounded-xl border border-cyan-300/20 bg-slate-950/70 p-3 text-xs text-slate-200">
-                      {item}
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {assistantViewLevel === 3 && (
-                <div className="space-y-3">
-                  <p className="text-sm text-cyan-100">Optimized solution: refactor, complexity improvements, and best practices.</p>
-                  {level3Explanation.length > 0 && (
-                    <div className="rounded-xl border border-cyan-300/20 bg-slate-950/70 p-3">
-                      <p className="text-[11px] uppercase tracking-wider text-slate-400">Explanation</p>
-                      <div className="mt-1 space-y-1 text-xs text-slate-200">
-                        {level3Explanation.map((item, idx) => (
-                          <p key={`lvl3-exp-${idx}`}>{item}</p>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {level3Complexity.length > 0 && (
-                    <div className="rounded-xl border border-cyan-300/20 bg-slate-950/70 p-3">
-                      <p className="text-[11px] uppercase tracking-wider text-slate-400">Complexity Improvements</p>
-                      <div className="mt-1 space-y-1 text-xs text-slate-200">
-                        {level3Complexity.map((item, idx) => (
-                          <p key={`lvl3-cx-${idx}`}>{item}</p>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {level3BestPractices.length > 0 && (
-                    <div className="rounded-xl border border-cyan-300/20 bg-slate-950/70 p-3">
-                      <p className="text-[11px] uppercase tracking-wider text-slate-400">Best Practices</p>
-                      <div className="mt-1 space-y-1 text-xs text-slate-200">
-                        {level3BestPractices.map((item, idx) => (
-                          <p key={`lvl3-bp-${idx}`}>{item}</p>
-                        ))}
-                      </div>
+                      ) : (
+                        <div className="rounded-lg border border-slate-800 bg-slate-900/90 overflow-hidden">
+                          <div className="flex items-center justify-between border-b border-slate-800 px-2 py-1.5">
+                            <span className="text-[10px] font-semibold uppercase tracking-wider text-cyan-300">Optimized Code</span>
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={handleCopyOptimizedCode}
+                                className="inline-flex items-center gap-1 rounded border border-slate-700 bg-slate-800 px-2 py-0.5 text-[10px] text-slate-200 hover:border-cyan-400"
+                              >
+                                <Copy className="h-3 w-3" />
+                                {copySuccess ? 'Copied' : 'Copy'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={handleDownloadOptimizedCode}
+                                className="inline-flex items-center gap-1 rounded border border-slate-700 bg-slate-800 px-2 py-0.5 text-[10px] text-slate-200 hover:border-cyan-400"
+                              >
+                                <Download className="h-3 w-3" />
+                                Download
+                              </button>
+                            </div>
+                          </div>
+                          <div className="h-[180px]">
+                            <Editor
+                              theme="vs-dark"
+                              language={language === 'plaintext' ? 'plaintext' : language}
+                              value={optimizedCodeForLevel3}
+                              options={{
+                                readOnly: true,
+                                minimap: { enabled: false },
+                                scrollBeyondLastLine: false,
+                                fontSize: 12,
+                                lineNumbers: 'on',
+                                wordWrap: 'off',
+                                automaticLayout: true,
+                              }}
+                            />
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
-              )}
-            </div>
-
-            {complexityAnalysis && (
-              <div className="rounded-2xl border border-indigo-500/20 bg-indigo-500/10 p-4">
-                <p className="text-xs uppercase tracking-wider text-indigo-300 font-semibold mb-2">Complexity Analysis</p>
-                <p className="text-sm text-slate-300 whitespace-pre-line">{complexityAnalysis}</p>
-              </div>
-            )}
-
-            {assistantViewLevel === 3 && (
-              <div className="rounded-2xl border border-slate-700 bg-slate-950/70 p-4">
-                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-xs uppercase tracking-wider text-slate-400 font-semibold">Optimized Code</p>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={handleCopyOptimizedCode}
-                      className="inline-flex items-center gap-1 rounded-lg border border-slate-600 px-2.5 py-1 text-[11px] text-slate-200 hover:border-cyan-400"
-                    >
-                      <Copy className="h-3.5 w-3.5" />
-                      {copySuccess ? 'Copied' : 'Copy'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleDownloadOptimizedCode}
-                      className="inline-flex items-center gap-1 rounded-lg border border-slate-600 px-2.5 py-1 text-[11px] text-slate-200 hover:border-cyan-400"
-                    >
-                      <Download className="h-3.5 w-3.5" />
-                      Download
-                    </button>
-                  </div>
-                </div>
-                <div className="h-[320px] overflow-hidden rounded-lg border border-slate-800">
-                  <Editor
-                    theme="vs-dark"
-                    language={language}
-                    value={optimizedCodeForLevel3}
-                    options={{
-                      readOnly: true,
-                      lineNumbers: 'on',
-                      folding: true,
-                      minimap: { enabled: false },
-                      scrollBeyondLastLine: false,
-                      wordWrap: 'off',
-                      automaticLayout: true,
-                      scrollbar: {
-                        vertical: 'visible',
-                        horizontal: 'visible',
-                        verticalScrollbarSize: 10,
-                        horizontalScrollbarSize: 10,
-                        useShadows: false,
-                      },
-                    }}
-                  />
-                </div>
-
-                <div className="mt-3 rounded-xl border border-slate-700 bg-slate-900/60 p-3">
-                  <p className="text-[11px] uppercase tracking-wider text-slate-400">Complexity Comparison</p>
-                  <div className="mt-2 grid gap-2 text-xs md:grid-cols-2">
-                    <div className="rounded-lg border border-slate-700/80 bg-slate-950/70 p-2 text-slate-200">
-                      Original Time Complexity {'->'} Optimized Time Complexity
-                      <p className="mt-1 font-semibold text-cyan-300">{originalComplexity.time} {'->'} {optimizedComplexity.time}</p>
-                    </div>
-                    <div className="rounded-lg border border-slate-700/80 bg-slate-950/70 p-2 text-slate-200">
-                      Original Space Complexity {'->'} Optimized Space Complexity
-                      <p className="mt-1 font-semibold text-cyan-300">{originalComplexity.space} {'->'} {optimizedComplexity.space}</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
+              </>
             )}
           </div>
         </motion.div>

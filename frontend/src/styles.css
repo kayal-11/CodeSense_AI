@@ -22,3 +22,28 @@ body {
 #root {
   min-height: 100vh;
 }
+
+.monaco-finding-highlight {
+  background-color: rgba(248, 113, 113, 0.14) !important;
+}
+
+.monaco-finding-highlight-active {
+  background-color: rgba(248, 113, 113, 0.32) !important;
+}
+
+.monaco-optimized-highlight {
+  background-color: rgba(56, 189, 248, 0.12) !important;
+}
+
+.review-splitter {
+  width: 5px;
+  cursor: col-resize;
+  flex-shrink: 0;
+  background: linear-gradient(to right, transparent, rgba(56, 189, 248, 0.35), transparent);
+  transition: background 0.15s ease;
+}
+
+.review-splitter:hover,
+.review-splitter.is-dragging {
+  background: rgba(56, 189, 248, 0.55);
+}

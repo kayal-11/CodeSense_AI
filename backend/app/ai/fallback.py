@@ -1,12 +1,13 @@
 import re
 from typing import Any
 from app.ai.base import BaseAIProvider
+from config.settings import settings
 
 
 class FallbackProvider(BaseAIProvider):
     """
     Fallback AI Provider.
-    Used when local Ollama is offline or unavailable.
+    Used when primary AI provider (Groq / Ollama) is offline, invalid, or unavailable.
     Provides helpful static code patterns and message routing.
     """
 
@@ -16,11 +17,12 @@ class FallbackProvider(BaseAIProvider):
 
     async def generate_response(self, prompt: str, system_prompt: str | None = None) -> str:
         prompt_lower = prompt.lower()
+        provider_name = (settings.llm_provider or 'groq').capitalize()
 
         # Simple conversational simulated replies
         if "hello" in prompt_lower or "hi" in prompt_lower:
             reply = (
-                "Hello! I am your CodeSense review copilot. Currently, the local Ollama LLM is offline. "
+                f"Hello! I am your CodeSense review copilot. Currently, the configured {provider_name} provider is offline or unconfigured. "
                 "I am running in heuristic mode. You can ask me general questions about security, "
                 "performance, or code structure, but conversational reasoning will be limited."
             )
@@ -40,14 +42,14 @@ class FallbackProvider(BaseAIProvider):
             )
         elif "explain" in prompt_lower or "how to" in prompt_lower:
             reply = (
-                "[Offline Mode] I can explain code snippets. Please start your local Ollama server "
-                "with an active coder model (e.g. `qwen2.5-coder`) for interactive explanation."
+                f"[Offline Mode] I can explain code snippets. Please configure a valid API key or endpoint for provider '{provider_name}' "
+                "for interactive explanation."
             )
         else:
             reply = (
-                "*(Note: Local Ollama LLM is offline. Running in rule-based fallback mode)*\n\n"
-                "I received your message: Let me know how I can help. To enable full AI chat capabilities, "
-                "please run a local Ollama server on port 11434 with a supported model."
+                f"*(Note: {provider_name} AI provider is offline or unconfigured. Running in rule-based fallback mode)*\n\n"
+                f"I received your message: Let me know how I can help. To enable full AI chat capabilities, "
+                f"please verify your settings for provider '{provider_name}' in .env."
             )
         return reply
 
@@ -59,6 +61,7 @@ class FallbackProvider(BaseAIProvider):
     ) -> dict[str, Any]:
         issues = []
         static_findings = static_analysis.get("issues", []) if isinstance(static_analysis, dict) else []
+        provider_name = (settings.llm_provider or 'groq').capitalize()
 
         # Start with static analysis findings
         for finding in static_findings:
@@ -95,7 +98,6 @@ class FallbackProvider(BaseAIProvider):
                             "line": line_num
                         })
                 if "except:" in line or "except Exception:" in line:
-                    # Check if next line contains "pass"
                     if idx + 1 < len(code_lines) and "pass" in code_lines[idx + 1]:
                         issues.append({
                             "type": "Error Handling",
@@ -180,9 +182,9 @@ class FallbackProvider(BaseAIProvider):
                 deduped_issues.append(issue)
 
         summary = (
-            "*(Local Ollama LLM is offline. Review generated via rule-based fallback analyzer)*\n\n"
+            f"*({provider_name} AI provider is offline or unconfigured. Review generated via rule-based fallback analyzer)*\n\n"
             f"Conducted heuristics analysis for {language}. Detected {len(deduped_issues)} potential issues. "
-            "Start your local Ollama server to unlock advanced deep semantic auditing and interactive reviews."
+            f"Configure valid credentials/endpoint for provider '{provider_name}' to unlock advanced deep semantic auditing."
         )
 
         bugs = [issue for issue in deduped_issues if issue["type"].lower() in ("syntaxerror", "bug")]
