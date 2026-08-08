@@ -205,10 +205,11 @@ class GroqProvider(BaseAIProvider):
             '  "level_3_solution_summary": "Linear time complexity solution using hash map for O(1) lookups."\n'
             "}\n"
             "CRITICAL RULES:\n"
+            "0. FIRST, check if code contains actual errors (syntax, compilation, runtime, undefined variables, missing imports, type mismatches, incorrect method calls). Prioritize reporting actual errors over minor improvements.\n"
             "1. Keep all text ultra-concise (1 line per section).\n"
-            "2. top_fixes MUST contain 2 to 3 short bullet points.\n"
+            "2. top_fixes MUST contain 2 to 3 short bullet points highlighting detected errors or key fixes.\n"
             "3. If code is already optimal, set is_already_optimal=true and optimized_code=\"\".\n"
-            "4. Return ONLY raw valid JSON."
+            "4. Return ONLY raw valid JSON.\n"
             "5. optimized_code MUST be properly formatted source code.\n"
             "6. Never minify or compress the code.\n"
             "7. Preserve standard indentation (4 spaces).\n"

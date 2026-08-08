@@ -217,6 +217,9 @@ interface Issue {
   severity: string;
   message: string;
   line: number;
+  end_line?: number;
+  start_col?: number;
+  end_col?: number;
   title?: string;
   description?: string;
   why_it_matters?: string;
@@ -262,10 +265,15 @@ interface FindingCard {
   severity: string;
   title: string;
   lineNumber: number | null;
+  endLineNumber?: number;
   description: string;
   whyItMatters: string;
   suggestedFix: string;
   improvedCode?: string;
+  isError?: boolean;
+  level?: string;
+  startCol?: number;
+  endCol?: number;
 }
 
 const severityRank: Record<string, number> = {
@@ -353,9 +361,15 @@ const asFindingCard = (input: Record<string, unknown>, fallbackCategory: string,
   const title = textFromAny(input.title) || titleCase(category);
   const lineRaw = textFromAny(input.line);
   const lineNumber = lineRaw && /^\d+$/.test(lineRaw) ? Number(lineRaw) : null;
+  const endLineRaw = textFromAny(input.end_line);
+  const endLineNumber = endLineRaw && /^\d+$/.test(endLineRaw) ? Number(endLineRaw) : undefined;
   const whyItMatters = textFromAny(input.why_it_matters || input.why) || inferWhyItMatters(category, severity);
   const suggestedFix = textFromAny(input.suggested_fix || input.fix) || 'Refactor the affected line and add a focused test to verify the improvement.';
   const improvedCode = textFromAny(input.improved_code) || undefined;
+  const isError = Boolean(input.is_error);
+  const level = textFromAny(input.level) || (isError ? 'Level 1' : undefined);
+  const startCol = typeof input.start_col === 'number' ? input.start_col : undefined;
+  const endCol = typeof input.end_col === 'number' ? input.end_col : undefined;
 
   return {
     id,
@@ -363,11 +377,45 @@ const asFindingCard = (input: Record<string, unknown>, fallbackCategory: string,
     severity,
     title,
     lineNumber,
+    endLineNumber,
     description,
     whyItMatters,
     suggestedFix,
     improvedCode,
+    isError,
+    level,
+    startCol,
+    endCol,
   };
+};
+
+const isErrorFinding = (finding: FindingCard): boolean => {
+  if (finding.isError) return true;
+  if ((finding.level || '').toLowerCase() === 'level 1') return true;
+  const cat = finding.category.toLowerCase();
+  const title = finding.title.toLowerCase();
+  const desc = finding.description.toLowerCase();
+  const combined = `${cat} ${title} ${desc}`;
+  const errorKeywords = [
+    'syntax error',
+    'compilation error',
+    'runtime error',
+    'undefined variable',
+    'used before it is declared',
+    'used before assignment',
+    'missing import',
+    'type mismatch',
+    'incorrect function usage',
+    'incorrect method usage',
+    'zero division',
+    'division by zero',
+    'referenceerror',
+    'typeerror',
+    'nameerror',
+    'syntaxerror',
+    'bug',
+  ];
+  return errorKeywords.some((kw) => combined.includes(kw));
 };
 
 const extractFindingsFromTextList = (items: string[], prefix: string): FindingCard[] => {
@@ -501,11 +549,16 @@ const formatLineLabel = (lineNumber: number | null): string => {
   return `Line ${lineNumber}`;
 };
 
-const suggestionKey = (finding: FindingCard): string =>
-  `${finding.severity}|${finding.lineNumber ?? 0}|${finding.title}|${finding.description}`.toLowerCase();
+const formatLineRangeLabel = (lineNumber: number | null, endLineNumber?: number): string => {
+  if (!lineNumber) return '—';
+  if (endLineNumber && endLineNumber > lineNumber) {
+    return `Lines ${lineNumber}-${endLineNumber}`;
+  }
+  return `Line ${lineNumber}`;
+};
 
-const DEFAULT_SUGGESTED_FIX = 'Refactor the affected line and add a focused test to verify the improvement.';
-const SEVERITY_GROUP_ORDER = ['critical', 'high', 'medium', 'low'] as const;
+const suggestionKey = (finding: FindingCard): string =>
+  `${finding.severity}|${finding.lineNumber ?? 0}|${finding.endLineNumber ?? 0}|${finding.startCol ?? 0}|${finding.endCol ?? 0}|${finding.title}|${finding.description}`.toLowerCase();
 
 const isActionableSuggestion = (finding: FindingCard): boolean => {
   const combined = `${finding.title} ${finding.description} ${finding.suggestedFix}`.trim();
@@ -536,26 +589,6 @@ const isActionableSuggestion = (finding: FindingCard): boolean => {
   return true;
 };
 
-const suggestionBulletText = (finding: FindingCard): string => {
-  const fix = oneLineText(finding.suggestedFix, 110);
-  const issue = oneLineText(finding.description || finding.title, 110);
-  if (fix && fix !== DEFAULT_SUGGESTED_FIX && fix !== issue) return fix;
-  return issue;
-};
-
-const severityEmoji = (severity: string): string => {
-  switch (severity.toLowerCase()) {
-    case 'critical':
-      return '🔴';
-    case 'high':
-      return '🟠';
-    case 'medium':
-      return '🟡';
-    default:
-      return '🟢';
-  }
-};
-
 const computeModifiedLines = (original: string, optimized: string): number[] => {
   if (!optimized.trim()) return [];
   const origLines = original.split('\n');
@@ -569,10 +602,6 @@ const computeModifiedLines = (original: string, optimized: string): number[] => 
   }
   return changed;
 };
-
-const EDITOR_LINE_HEIGHT_PX = 20;
-const EDITOR_VISIBLE_LINES = 22;
-const EDITOR_BODY_HEIGHT = EDITOR_LINE_HEIGHT_PX * EDITOR_VISIBLE_LINES;
 
 const ReviewPage = () => {
   const [code, setCode] = useState(LANGUAGE_TEMPLATES[DEFAULT_LANGUAGE].sampleCode);
@@ -595,7 +624,6 @@ const ReviewPage = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copySuccess, setCopySuccess] = useState(false);
-  const [copyCodeSuccess, setCopyCodeSuccess] = useState(false);
   const [activeLine, setActiveLine] = useState<number | null>(null);
   const [editorWidthPct, setEditorWidthPct] = useState(68);
   const [splitterDragging, setSplitterDragging] = useState(false);
@@ -846,38 +874,46 @@ const ReviewPage = () => {
     [summary, score, complexityAnalysis, findings, code]
   );
 
-  const aiSuggestions = useMemo(() => {
+  const { aiSuggestions, level1Errors, improvements } = useMemo(() => {
     const deduped = new Map<string, FindingCard>();
     findings.forEach((finding) => {
       if (!isActionableSuggestion(finding)) return;
       const key = suggestionKey(finding);
       if (!deduped.has(key)) deduped.set(key, finding);
     });
-    return Array.from(deduped.values()).sort((a, b) => {
+    const items = Array.from(deduped.values());
+
+    const errors = items.filter((f) => isErrorFinding(f));
+    const nonErrors = items.filter((f) => !isErrorFinding(f));
+
+    const sortFn = (a: FindingCard, b: FindingCard) => {
       const severityDiff = (severityRank[b.severity] || 0) - (severityRank[a.severity] || 0);
       if (severityDiff !== 0) return severityDiff;
       return (a.lineNumber ?? Number.MAX_SAFE_INTEGER) - (b.lineNumber ?? Number.MAX_SAFE_INTEGER);
-    });
+    };
+
+    errors.sort(sortFn);
+    nonErrors.sort(sortFn);
+
+    return {
+      aiSuggestions: [...errors, ...nonErrors],
+      level1Errors: errors,
+      improvements: nonErrors,
+    };
   }, [findings]);
 
-  const groupedSuggestions = useMemo(() => {
-    const groups = new Map<string, FindingCard[]>();
+  const affectedLines = useMemo(() => {
+    const expanded = new Set<number>();
     aiSuggestions.forEach((finding) => {
-      const severity = finding.severity.toLowerCase();
-      const bucket = groups.get(severity) ?? [];
-      bucket.push(finding);
-      groups.set(severity, bucket);
+      if (!finding.lineNumber) return;
+      const start = finding.lineNumber;
+      const end = finding.endLineNumber && finding.endLineNumber >= start ? finding.endLineNumber : start;
+      for (let line = start; line <= end; line += 1) {
+        expanded.add(line);
+      }
     });
-    return SEVERITY_GROUP_ORDER.filter((severity) => groups.has(severity)).map((severity) => ({
-      severity,
-      items: groups.get(severity) ?? [],
-    }));
+    return Array.from(expanded).sort((a, b) => a - b);
   }, [aiSuggestions]);
-
-  const affectedLines = useMemo(
-    () => [...new Set(aiSuggestions.map((finding) => finding.lineNumber).filter((line): line is number => Boolean(line)))],
-    [aiSuggestions]
-  );
 
   const optimizedCodeForLevel3 = useMemo(() => {
     const raw =
@@ -917,17 +953,52 @@ const ReviewPage = () => {
     const monaco = monacoRef.current;
     if (!editor || !monaco) return;
 
-    const suggestionDecorations = affectedLines.map((lineNumber) => ({
-      range: new monaco.Range(lineNumber, 1, lineNumber, 1),
-      options: {
-        isWholeLine: true,
-        className: lineNumber === activeLine ? 'monaco-finding-highlight-active' : 'monaco-finding-highlight',
-        overviewRuler: {
-          color: lineNumber === activeLine ? '#f87171' : '#fb7185',
-          position: monaco.editor.OverviewRulerLane.Full,
+    const errorLineSet = new Set(
+      aiSuggestions
+        .filter((finding) => isErrorFinding(finding))
+        .map((finding) => finding.lineNumber)
+        .filter((line): line is number => Boolean(line))
+    );
+
+    const suggestionDecorations = affectedLines.map((lineNumber) => {
+      const isErr = errorLineSet.has(lineNumber);
+      const isActive = lineNumber === activeLine;
+
+      let className = 'monaco-finding-highlight';
+      if (isErr) {
+        className = isActive ? 'monaco-error-line-highlight-active' : 'monaco-error-line-highlight';
+      } else if (isActive) {
+        className = 'monaco-finding-highlight-active';
+      }
+
+      return {
+        range: new monaco.Range(lineNumber, 1, lineNumber, 1),
+        options: {
+          isWholeLine: true,
+          className,
+          overviewRuler: {
+            color: isErr ? '#ef4444' : isActive ? '#f87171' : '#fb7185',
+            position: monaco.editor.OverviewRulerLane.Full,
+          },
         },
-      },
-    }));
+      };
+    });
+
+    const errorTokenDecorations = aiSuggestions
+      .filter((finding) => isErrorFinding(finding) && finding.lineNumber && finding.startCol)
+      .map((finding) => {
+        const startLine = Math.max(1, finding.lineNumber as number);
+        const endLine = finding.endLineNumber && finding.endLineNumber >= startLine ? finding.endLineNumber : startLine;
+        const startColumn = Math.max(1, finding.startCol as number);
+        const endColumn = finding.endCol && finding.endCol > startColumn ? finding.endCol : startColumn + 1;
+
+        return {
+          range: new monaco.Range(startLine, startColumn, endLine, endColumn),
+          options: {
+            inlineClassName: 'monaco-error-token-highlight',
+          },
+        };
+      });
 
     const optimizedDecorations = modifiedLines
       .filter((lineNumber) => !affectedLines.includes(lineNumber))
@@ -945,9 +1016,34 @@ const ReviewPage = () => {
 
     decorationIdsRef.current = editor.deltaDecorations(decorationIdsRef.current, [
       ...suggestionDecorations,
+      ...errorTokenDecorations,
       ...optimizedDecorations,
     ]);
-  }, [affectedLines, activeLine, modifiedLines, code]);
+
+    const model = editor.getModel();
+    if (model) {
+      const markers = aiSuggestions
+        .filter((finding) => isErrorFinding(finding))
+        .map((finding) => {
+          const line = Math.min(model.getLineCount(), Math.max(1, finding.lineNumber ?? 1));
+          const endLine = Math.min(model.getLineCount(), Math.max(line, finding.endLineNumber ?? line));
+          const maxCol = model.getLineMaxColumn(line);
+          const maxEndCol = model.getLineMaxColumn(endLine);
+          const startColumn = Math.min(maxCol, Math.max(1, finding.startCol ?? 1));
+          const endColumn = Math.min(maxEndCol, Math.max(startColumn + 1, finding.endCol ?? maxEndCol));
+          return {
+            startLineNumber: line,
+            startColumn,
+            endLineNumber: endLine,
+            endColumn,
+            message: `[Error] ${finding.description || finding.title}\nWhy: ${finding.whyItMatters}\nFix: ${finding.suggestedFix}`,
+            severity: monaco.MarkerSeverity.Error,
+            source: 'CodeSense AI Error Detector',
+          };
+        });
+      monaco.editor.setModelMarkers(model, 'codesense-errors', markers);
+    }
+  }, [affectedLines, activeLine, modifiedLines, code, aiSuggestions]);
 
   const handleCopyOptimizedCode = async () => {
     try {
@@ -957,29 +1053,6 @@ const ReviewPage = () => {
     } catch {
       setCopySuccess(false);
     }
-  };
-
-  const handleCopyCode = async () => {
-    try {
-      await navigator.clipboard.writeText(code);
-      setCopyCodeSuccess(true);
-      window.setTimeout(() => setCopyCodeSuccess(false), 1200);
-    } catch {
-      setCopyCodeSuccess(false);
-    }
-  };
-
-  const handleDownloadCode = () => {
-    const template = templateForLanguage(language);
-    const blob = new Blob([code], { type: 'text/plain;charset=utf-8' });
-    const objectUrl = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = objectUrl;
-    anchor.download = fileNameHint || template.fileName;
-    document.body.appendChild(anchor);
-    anchor.click();
-    document.body.removeChild(anchor);
-    URL.revokeObjectURL(objectUrl);
   };
 
   const handleDownloadOptimizedCode = () => {
@@ -999,6 +1072,12 @@ const ReviewPage = () => {
 
   return (
     <div className="space-y-6">
+      {error && (
+        <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-200">
+          {error}
+        </div>
+      )}
+
       <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <p className="text-sm uppercase tracking-[0.3em] text-cyan-400">Review Code</p>
@@ -1024,6 +1103,7 @@ const ReviewPage = () => {
           <div className="mb-3 flex items-center justify-between">
             <h2 className="text-lg font-semibold text-white">Editor</h2>
             <div className="flex items-center gap-2">
+              <span className="hidden" aria-hidden="true">{editorWidthPct}%</span>
               <label className="inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-950 px-3 py-1.5 text-[11px] text-slate-300">
                 <input
                   type="checkbox"
@@ -1118,61 +1198,140 @@ const ReviewPage = () => {
               <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-amber-200">Medium <span className="float-right font-semibold">{severityBreakdown.medium ?? 0}</span></div>
               <div className="rounded-lg border border-blue-500/30 bg-blue-500/10 px-2 py-1.5 text-blue-200">Low <span className="float-right font-semibold">{severityBreakdown.low ?? 0}</span></div>
             </div>
+        </div>
+
+        {/* Vertical Splitter Handle */}
+        {isWideLayout && (
+          <div
+            onMouseDown={() => {
+              splitterDraggingRef.current = true;
+              setSplitterDragging(true);
+            }}
+            className={`review-splitter hidden lg:block rounded ${splitterDragging ? 'is-dragging' : ''}`}
+            title="Drag to resize code editor"
+          />
+        )}
+
+        {/* Right Details Sidebar */}
+        <div className="flex-1 rounded-2xl border border-slate-800 bg-slate-950 p-4 space-y-4 overflow-y-auto max-h-[850px] shadow-2xl">
+          <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+            <h2 className="text-base font-semibold text-white">AI Analysis &amp; Findings</h2>
+            {wasCached && (
+              <span className="rounded bg-cyan-500/10 border border-cyan-500/20 px-2 py-0.5 text-[10px] text-cyan-300">
+                ⚡ Cached Report
+              </span>
+            )}
           </div>
 
-          <div className="flex-1 space-y-3 overflow-y-auto pr-1 min-h-0">
-            {error && (
-              <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-xs text-red-300">
-                {error}
+          {loading ? (
+            <div className="py-10 text-center text-sm text-slate-400 italic flex flex-col items-center justify-center gap-2">
+              <div className="h-7 w-7 animate-spin rounded-full border-2 border-cyan-500 border-t-transparent" />
+              Evaluating code quality with Groq AI...
+            </div>
+          ) : (
+            <>
+              {/* Audit Report Summary */}
+              <div className="rounded-xl border border-slate-800 bg-slate-950/80 p-3 space-y-1">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-1">Audit Report Summary</p>
+                <p className="text-xs text-slate-200 leading-snug">🏆 Score: <span className="text-white font-medium">{auditSummary.score}</span></p>
+                <p className="text-xs text-slate-200 leading-snug">✅ Correctness: <span className="text-white font-medium">{auditSummary.correctness}</span></p>
+                <p className="text-xs text-slate-200 leading-snug">⚡ Time &amp; Space Complexity: <span className="text-white font-medium">{auditSummary.complexity}</span></p>
+                <p className="text-xs text-slate-200 leading-snug">🛡️ Security: <span className="text-white font-medium">{auditSummary.security}</span></p>
+                <p className="text-xs text-slate-200 leading-snug">🚀 Verdict: <span className="text-white font-medium">{oneLineText(auditSummary.verdict, 160)}</span></p>
               </div>
-            )}
 
-            {loading ? (
-              <div className="py-10 text-center text-sm text-slate-400 italic flex flex-col items-center justify-center gap-2">
-                <div className="h-7 w-7 animate-spin rounded-full border-2 border-cyan-500 border-t-transparent" />
-                Evaluating code quality with Groq AI...
+              {/* 3. AI Suggestions */}
+              <div className="rounded-xl border border-slate-800 bg-slate-950/80 p-3 space-y-3">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">AI Suggestions</p>
+                {level1Errors.length === 0 && improvements.length === 0 ? (
+                  <p className="text-xs text-emerald-300">✅ No actionable suggestions. Code looks clean.</p>
+                ) : (
+                  <>
+                    {/* Level 1 Errors Section */}
+                    {level1Errors.length > 0 && (
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <p className="text-[11px] font-bold text-rose-400 flex items-center gap-1.5 uppercase tracking-wide">
+                            <span>🔴 Level 1 – Errors</span>
+                            <span className="rounded-full bg-rose-500/20 text-rose-300 px-2 py-0.5 text-[10px] font-semibold">{level1Errors.length}</span>
+                          </p>
+                        </div>
+                        <div className="space-y-2">
+                          {level1Errors.map((finding) => (
+                            <button
+                              key={finding.id}
+                              type="button"
+                              onClick={() => scrollToLine(finding.lineNumber)}
+                              className={`w-full rounded-lg border border-red-500/35 bg-red-500/10 p-3 text-left transition hover:border-red-400 ${
+                                finding.lineNumber === activeLine ? 'ring-1 ring-red-400 bg-red-500/20' : ''
+                              }`}
+                            >
+                              <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
+                                <span className="rounded border border-red-500/40 bg-red-500/20 px-1.5 py-0.5 text-[10px] font-bold uppercase text-red-200">
+                                  🔴 Level 1 – Error
+                                </span>
+                                <span className="text-[11px] font-semibold text-rose-300">
+                                  {formatLineRangeLabel(finding.lineNumber, finding.endLineNumber)}
+                                </span>
+                              </div>
+                              <div className="space-y-1.5 text-xs">
+                                <p className="text-slate-100 font-medium leading-snug">
+                                  {oneLineText(finding.description || finding.title)}
+                                </p>
+                                {finding.whyItMatters && (
+                                  <div>
+                                    <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Why:</p>
+                                    <p className="text-slate-300 leading-snug">{oneLineText(finding.whyItMatters)}</p>
+                                  </div>
+                                )}
+                                <div>
+                                  <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Fix:</p>
+                                  <p className="text-emerald-300 font-mono text-[11px] bg-slate-900/80 px-2 py-1 rounded border border-emerald-500/20 leading-snug">
+                                    {oneLineText(finding.suggestedFix)}
+                                  </p>
+                                </div>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Improvements Section */}
+                    {improvements.length > 0 && (
+                      <div className="space-y-2 pt-1">
+                        <div className="flex items-center justify-between">
+                          <p className="text-[11px] font-bold text-amber-400 flex items-center gap-1.5 uppercase tracking-wide">
+                            <span>💡 Improvements</span>
+                            <span className="rounded-full bg-amber-500/20 text-amber-300 px-2 py-0.5 text-[10px] font-semibold">{improvements.length}</span>
+                          </p>
+                        </div>
+                        <div className="space-y-2">
+                          {improvements.map((finding) => (
+                            <button
+                              key={finding.id}
+                              type="button"
+                              onClick={() => scrollToLine(finding.lineNumber)}
+                              className={`w-full rounded-lg border p-2.5 text-left transition hover:border-cyan-500/40 ${getSeverityStyles(finding.severity)} ${
+                                finding.lineNumber === activeLine ? 'ring-1 ring-cyan-400/60' : ''
+                              }`}
+                            >
+                              <div className="flex flex-wrap items-center gap-2 mb-1">
+                                <span className={`rounded border px-1.5 py-0.5 text-[10px] font-bold uppercase ${severityBadgeClass(finding.severity)}`}>
+                                  {severityDisplay(finding.severity)}
+                                </span>
+                                <span className="text-[10px] text-slate-400">{formatLineLabel(finding.lineNumber)}</span>
+                              </div>
+                              <p className="text-xs text-slate-100 leading-snug"><span className="text-slate-400">Issue:</span> {oneLineText(finding.description || finding.title)}</p>
+                              <p className="text-xs text-slate-300 leading-snug mt-0.5"><span className="text-slate-400">Fix:</span> {oneLineText(finding.suggestedFix)}</p>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
-            ) : (
-              <>
-                {/* 2. Audit Report Summary */}
-                <div className="rounded-xl border border-slate-800 bg-slate-950/80 p-3 space-y-1">
-                  <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-1">Audit Report Summary</p>
-                  <p className="text-xs text-slate-200 leading-snug">🏆 Score: <span className="text-white font-medium">{auditSummary.score}</span></p>
-                  <p className="text-xs text-slate-200 leading-snug">✅ Correctness: <span className="text-white font-medium">{auditSummary.correctness}</span></p>
-                  <p className="text-xs text-slate-200 leading-snug">⚡ Time &amp; Space Complexity: <span className="text-white font-medium">{auditSummary.complexity}</span></p>
-                  <p className="text-xs text-slate-200 leading-snug">🛡️ Security: <span className="text-white font-medium">{auditSummary.security}</span></p>
-                  <p className="text-xs text-slate-200 leading-snug">🚀 Verdict: <span className="text-white font-medium">{oneLineText(auditSummary.verdict, 160)}</span></p>
-                </div>
-
-                {/* 3. AI Suggestions */}
-                <div className="rounded-xl border border-slate-800 bg-slate-950/80 p-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-2">AI Suggestions</p>
-                  {aiSuggestions.length === 0 ? (
-                    <p className="text-xs text-emerald-300">✅ No actionable suggestions. Code looks clean.</p>
-                  ) : (
-                    <div className="space-y-2">
-                      {aiSuggestions.map((finding) => (
-                        <button
-                          key={finding.id}
-                          type="button"
-                          onClick={() => scrollToLine(finding.lineNumber)}
-                          className={`w-full rounded-lg border p-2.5 text-left transition hover:border-cyan-500/40 ${getSeverityStyles(finding.severity)} ${
-                            finding.lineNumber === activeLine ? 'ring-1 ring-cyan-400/60' : ''
-                          }`}
-                        >
-                          <div className="flex flex-wrap items-center gap-2 mb-1">
-                            <span className={`rounded border px-1.5 py-0.5 text-[10px] font-bold uppercase ${severityBadgeClass(finding.severity)}`}>
-                              {severityDisplay(finding.severity)}
-                            </span>
-                            <span className="text-[10px] text-slate-400">{formatLineLabel(finding.lineNumber)}</span>
-                          </div>
-                          <p className="text-xs text-slate-100 leading-snug"><span className="text-slate-400">Issue:</span> {oneLineText(finding.description || finding.title)}</p>
-                          <p className="text-xs text-slate-300 leading-snug mt-0.5"><span className="text-slate-400">Fix:</span> {oneLineText(finding.suggestedFix)}</p>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
 
                 {/* 4. 3-Level Learning Assistant */}
                 <div className="rounded-xl border border-cyan-500/25 bg-slate-950/80 p-3">

@@ -52,12 +52,30 @@ def normalize_issue(issue: dict[str, Any], fallback_type: str = 'Issue') -> dict
     severity = raw_severity if raw_severity in SEVERITY_ORDER else 'medium'
     message = str(issue.get('message', 'Issue detected by analyzer.')).strip() or 'Issue detected by analyzer.'
 
-    return {
+    normalized: dict[str, Any] = {
         'type': raw_type,
         'severity': severity,
         'message': message,
         'line': coerce_line(issue.get('line', 1)),
     }
+    why = issue.get('why_it_matters') or issue.get('why')
+    if why and isinstance(why, str):
+        normalized['why_it_matters'] = why.strip()
+    fix = issue.get('suggested_fix') or issue.get('fix')
+    if fix and isinstance(fix, str):
+        normalized['suggested_fix'] = fix.strip()
+    if 'is_error' in issue:
+        normalized['is_error'] = bool(issue.get('is_error'))
+    if 'level' in issue:
+        normalized['level'] = str(issue.get('level')).strip()
+    if 'start_col' in issue:
+        normalized['start_col'] = issue.get('start_col')
+    if 'end_col' in issue:
+        normalized['end_col'] = issue.get('end_col')
+    if 'end_line' in issue:
+        normalized['end_line'] = issue.get('end_line')
+    return normalized
+
 
 
 def dedupe_and_sort_issues(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -65,12 +65,19 @@ class FallbackProvider(BaseAIProvider):
 
         # Start with static analysis findings
         for finding in static_findings:
-            issues.append({
+            item = {
                 "type": finding.get("type", "Static analysis warning"),
                 "severity": finding.get("severity", "medium"),
                 "message": finding.get("message", "Issue detected by static rules."),
                 "line": finding.get("line", 1)
-            })
+            }
+            if finding.get("why_it_matters"):
+                item["why_it_matters"] = finding.get("why_it_matters")
+            if finding.get("suggested_fix"):
+                item["suggested_fix"] = finding.get("suggested_fix")
+            if "is_error" in finding:
+                item["is_error"] = finding.get("is_error")
+            issues.append(item)
 
         # Apply basic heuristics to find common issues across different languages
         code_lines = code.split("\n")

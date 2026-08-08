@@ -145,7 +145,7 @@ class OllamaProvider(BaseAIProvider):
             '  "documentation_suggestions": [],\n'
             '  "unit_test_suggestions": []\n'
             "}\n"
-            "Use concise, actionable outputs. Keep lists focused and non-empty when issues are found."
+            "Use concise, actionable outputs. FIRST check for detectable errors (syntax, compilation, runtime, undefined variables, missing imports, type mismatches) and prioritize error items in bugs and suggested_fixes."
         )
 
         prompt = (
