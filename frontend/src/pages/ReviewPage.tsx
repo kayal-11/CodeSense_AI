@@ -5,7 +5,8 @@ import { motion } from 'framer-motion';
 import axios from 'axios';
 import { detectLanguage } from '../utils/languageDetection';
 import { deriveComplexity } from '../utils/complexityAnalysis';
-import { Copy, Download, Upload } from 'lucide-react';
+import { Copy, Download, Sparkles, Upload } from 'lucide-react';
+import { detectSyntaxErrors, recalculateFindingLine } from '../utils/syntaxChecker';
 
 const configuredApiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim();
 const API_BASE = configuredApiBase && configuredApiBase.length > 0 ? configuredApiBase.replace(/\/$/, '') : '/api';
@@ -297,6 +298,33 @@ const titleCase = (value: string): string =>
     .replace(/\s+/g, ' ')
     .trim()
     .replace(/\b\w/g, (ch) => ch.toUpperCase());
+
+const getValidErrorLineNumber = (
+  rawLine: number | null | undefined,
+  codeLines: string[]
+): number | null => {
+  if (!rawLine || rawLine < 1 || rawLine > codeLines.length) {
+    return null;
+  }
+
+  const targetLineIdx = rawLine - 1;
+  if (codeLines[targetLineIdx].trim().length > 0) {
+    return rawLine;
+  }
+
+  // If the target line is blank/empty, check adjacent lines (+1, -1, +2, -2) for nearest non-empty code line
+  const offsets = [1, -1, 2, -2];
+  for (const offset of offsets) {
+    const candidateIdx = targetLineIdx + offset;
+    if (candidateIdx >= 0 && candidateIdx < codeLines.length) {
+      if (codeLines[candidateIdx].trim().length > 0) {
+        return candidateIdx + 1;
+      }
+    }
+  }
+
+  return null;
+};
 
 const textFromAny = (value: unknown): string => {
   if (typeof value === 'string') return value.trim();
@@ -629,12 +657,44 @@ const ReviewPage = () => {
   const [splitterDragging, setSplitterDragging] = useState(false);
   const [isWideLayout, setIsWideLayout] = useState(() => typeof window !== 'undefined' && window.innerWidth >= 1280);
   const localAnalysisCache = useRef<Map<string, ReviewResponse>>(new Map());
+  const lastAnalyzedCodeRef = useRef<string>('');
   const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof import('monaco-editor') | null>(null);
   const decorationIdsRef = useRef<string[]>([]);
   const splitContainerRef = useRef<HTMLDivElement | null>(null);
   const cursorPositionRef = useRef<{ lineNumber: number; column: number } | null>(null);
   const splitterDraggingRef = useRef(false);
+
+  const clearAnalysisStateAndHighlights = useCallback(() => {
+    setFindings([]);
+    setScore(null);
+    setSeverityBreakdown({ critical: 0, high: 0, medium: 0, low: 0 });
+    setAnalysisHash('');
+    setWasCached(false);
+    setLearningAssistant({});
+    setComplexityAnalysis('');
+    setRefactoredCode('');
+    setSummary('Review ready to run.');
+    setActiveLine(null);
+
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    if (editor && monaco) {
+      decorationIdsRef.current = editor.deltaDecorations(decorationIdsRef.current, []);
+      const model = editor.getModel();
+      if (model) {
+        monaco.editor.setModelMarkers(model, 'codesense-errors', []);
+      }
+    }
+  }, []);
+
+  const handleCodeChange = useCallback((newCode: string) => {
+    setCode(newCode);
+    if (newCode !== lastAnalyzedCodeRef.current && lastAnalyzedCodeRef.current !== '') {
+      clearAnalysisStateAndHighlights();
+      lastAnalyzedCodeRef.current = '';
+    }
+  }, [clearAnalysisStateAndHighlights]);
 
   const languageOptions = useMemo(
     () => [
@@ -655,21 +715,22 @@ const ReviewPage = () => {
   const supportedLanguages = useMemo(() => new Set(languageOptions.map((option) => option.value)), [languageOptions]);
 
   useEffect(() => {
+    const detection = detectLanguage(code, fileNameHint);
+
     if (!autoDetectEnabled) {
       const manualTemplate = templateForLanguage(language);
-      setDetectedLanguage(manualTemplate.label);
-      setDetectionConfidence('high');
-      setDetectionReason(`Manual selection active. Using ${manualTemplate.label} for editor, filename, and analysis.`);
+      setDetectedLanguage(detection.detectedLanguage || manualTemplate.label);
+      setDetectionConfidence(detection.confidence);
+      setDetectionReason(`Manual selection active (${manualTemplate.label}). Code syntax matches ${detection.detectedLanguage}.`);
       return;
     }
 
-    const detection = detectLanguage(code, fileNameHint);
     setDetectedLanguage(detection.detectedLanguage);
     setDetectionConfidence(detection.confidence);
     setDetectionReason(detection.reason);
 
     const autoLanguage = supportedLanguages.has(detection.language) ? detection.language : 'plaintext';
-    if (isSupportedLanguage(autoLanguage)) {
+    if (isSupportedLanguage(autoLanguage) && autoLanguage !== language) {
       setLanguage(autoLanguage);
     }
   }, [autoDetectEnabled, code, fileNameHint, language, supportedLanguages]);
@@ -719,6 +780,7 @@ const ReviewPage = () => {
   }, []);
 
   const applyReviewPayload = (payload: ReviewResponse, options?: { fromCache?: boolean; localHash?: string }) => {
+    lastAnalyzedCodeRef.current = code;
     const mergedScore = payload.overall_score ?? payload.score ?? null;
     setSummary(payload.summary);
     setScore(mergedScore);
@@ -773,6 +835,8 @@ const ReviewPage = () => {
 
     try {
       const text = await file.text();
+      clearAnalysisStateAndHighlights();
+      lastAnalyzedCodeRef.current = '';
       setFileNameHint(file.name);
       setCode(text);
       setError(null);
@@ -785,6 +849,8 @@ const ReviewPage = () => {
 
   const handleManualLanguageChange = (nextLanguage: SupportedLanguage) => {
     const template = templateForLanguage(nextLanguage);
+    clearAnalysisStateAndHighlights();
+    lastAnalyzedCodeRef.current = '';
     setAutoDetectEnabled(false);
     setLanguage(nextLanguage);
     setFileNameHint(template.fileName);
@@ -825,6 +891,7 @@ const ReviewPage = () => {
     const cachedLocal = localAnalysisCache.current.get(cacheKey);
     if (cachedLocal) {
       applyReviewPayload(cachedLocal, { fromCache: true, localHash: sourceHash });
+      lastAnalyzedCodeRef.current = code;
       setLoading(false);
       return;
     }
@@ -840,6 +907,7 @@ const ReviewPage = () => {
       const payload = response.data;
       localAnalysisCache.current.set(cacheKey, payload);
       applyReviewPayload(payload, { localHash: sourceHash });
+      lastAnalyzedCodeRef.current = code;
     } catch (err: any) {
       console.error('Error running code review:', err);
       const statusCode = Number(err?.response?.status ?? 0);
@@ -874,6 +942,10 @@ const ReviewPage = () => {
     [summary, score, complexityAnalysis, findings, code]
   );
 
+  const codeLines = useMemo(() => code.split('\n'), [code]);
+
+  const realTimeSyntaxErrors = useMemo(() => detectSyntaxErrors(code, language), [code, language]);
+
   const { aiSuggestions, level1Errors, improvements } = useMemo(() => {
     const deduped = new Map<string, FindingCard>();
     findings.forEach((finding) => {
@@ -883,8 +955,48 @@ const ReviewPage = () => {
     });
     const items = Array.from(deduped.values());
 
-    const errors = items.filter((f) => isErrorFinding(f));
+    const rawErrors = items.filter((f) => isErrorFinding(f));
     const nonErrors = items.filter((f) => !isErrorFinding(f));
+
+    // Convert real-time syntax errors to finding cards
+    const realTimeFindingCards: FindingCard[] = realTimeSyntaxErrors.map((rtErr, index) => ({
+      id: `realtime-syntax-err-${index}`,
+      category: 'Syntax Error',
+      severity: 'critical',
+      title: rtErr.title,
+      lineNumber: rtErr.lineNumber,
+      description: rtErr.description,
+      whyItMatters: 'Syntax errors break execution or compilation and prevent code from running.',
+      suggestedFix: `Fix the syntax error at line ${rtErr.lineNumber}: ${rtErr.title}`,
+      isError: true,
+      level: 'Level 1',
+    }));
+
+    // Combine real-time syntax errors with analysis errors
+    const allErrorsToProcess = [...realTimeFindingCards, ...rawErrors];
+
+    const mergedErrorsMap = new Map<string, FindingCard>();
+    allErrorsToProcess.forEach((err) => {
+      // Determine the actual error line from the current code, recalculating dynamically whenever code changes
+      const calculatedLine = recalculateFindingLine(err, codeLines) ?? getValidErrorLineNumber(err.lineNumber, codeLines);
+      if (!calculatedLine) return; // Skip stale errors whose target code no longer exists or is empty
+
+      const updatedErr = { ...err, lineNumber: calculatedLine };
+
+      const normText = (updatedErr.description || updatedErr.title)
+        .toLowerCase()
+        .replace(/^(syntaxerror|typeerror|referenceerror|nameerror|error|compiler error|runtime error|bug)[:\s]*/i, '')
+        .replace(/\bline\s+\d+[:\s]*/gi, '')
+        .replace(/[^a-z0-9]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      const key = `${calculatedLine}|${normText}`;
+      if (!mergedErrorsMap.has(key)) {
+        mergedErrorsMap.set(key, updatedErr);
+      }
+    });
+    const errors = Array.from(mergedErrorsMap.values());
 
     const sortFn = (a: FindingCard, b: FindingCard) => {
       const severityDiff = (severityRank[b.severity] || 0) - (severityRank[a.severity] || 0);
@@ -900,7 +1012,7 @@ const ReviewPage = () => {
       level1Errors: errors,
       improvements: nonErrors,
     };
-  }, [findings]);
+  }, [findings, codeLines, realTimeSyntaxErrors]);
 
   const affectedLines = useMemo(() => {
     const expanded = new Set<number>();
@@ -948,60 +1060,117 @@ const ReviewPage = () => {
     editor.focus();
   }, []);
 
+  const handleApplyLevel3Solution = async () => {
+    if (!optimizedCodeForLevel3.trim()) return;
+
+    clearAnalysisStateAndHighlights();
+
+    const newCode = optimizedCodeForLevel3;
+    setCode(newCode);
+    lastAnalyzedCodeRef.current = newCode;
+
+    setLoading(true);
+    setError(null);
+    saveEditorCursor();
+
+    const sourceHash = stableCodeHash(newCode);
+    const cacheKey = `${sourceHash}:${language}:standard-v1`;
+    const cachedLocal = localAnalysisCache.current.get(cacheKey);
+    if (cachedLocal) {
+      applyReviewPayload(cachedLocal, { fromCache: true, localHash: sourceHash });
+      lastAnalyzedCodeRef.current = newCode;
+      setLoading(false);
+      return;
+    }
+
+    try {
+      const response = await axios.post<ReviewResponse>(apiUrl('/review/'), {
+        code: newCode,
+        language,
+        analysis_profile: 'standard-v1',
+      }, {
+        headers: authHeaders(),
+      });
+      const payload = response.data;
+      localAnalysisCache.current.set(cacheKey, payload);
+      applyReviewPayload(payload, { localHash: sourceHash });
+      lastAnalyzedCodeRef.current = newCode;
+    } catch (err: any) {
+      console.error('Error running code review on optimized solution:', err);
+      const statusCode = Number(err?.response?.status ?? 0);
+      const serverDetail = err?.response?.data?.detail;
+      const networkDetail = err?.message;
+      if (statusCode === 401) {
+        setError('Your session is invalid or expired. Please log in again and retry analysis.');
+      } else {
+        setError(serverDetail || networkDetail || 'Failed to complete review on optimized solution.');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
     const editor = editorRef.current;
     const monaco = monacoRef.current;
     if (!editor || !monaco) return;
 
-    const errorLineSet = new Set(
-      aiSuggestions
-        .filter((finding) => isErrorFinding(finding))
-        .map((finding) => finding.lineNumber)
-        .filter((line): line is number => Boolean(line))
-    );
+    const model = editor.getModel();
 
-    const suggestionDecorations = affectedLines.map((lineNumber) => {
-      const isErr = errorLineSet.has(lineNumber);
-      const isActive = lineNumber === activeLine;
-
-      let className = 'monaco-finding-highlight';
-      if (isErr) {
-        className = isActive ? 'monaco-error-line-highlight-active' : 'monaco-error-line-highlight';
-      } else if (isActive) {
-        className = 'monaco-finding-highlight-active';
+    if (level1Errors.length === 0) {
+      decorationIdsRef.current = editor.deltaDecorations(decorationIdsRef.current, []);
+      if (model) {
+        monaco.editor.setModelMarkers(model, 'codesense-errors', []);
       }
+      return;
+    }
 
+    // Map each confirmed Level 1 error to its exact verified line
+    const mappedErrorItems: Array<{ finding: FindingCard; line: number }> = [];
+    level1Errors.forEach((finding) => {
+      if (isErrorFinding(finding) && finding.lineNumber && finding.lineNumber >= 1 && finding.lineNumber <= codeLines.length) {
+        mappedErrorItems.push({ finding, line: finding.lineNumber });
+      }
+    });
+
+    const errorLineSet = new Set(mappedErrorItems.map((item) => item.line));
+
+    // Red whole-line highlights ONLY for confirmed errors on exact valid code lines
+    const errorLineDecorations = Array.from(errorLineSet).map((lineNumber) => {
+      const isActive = lineNumber === activeLine;
       return {
         range: new monaco.Range(lineNumber, 1, lineNumber, 1),
         options: {
           isWholeLine: true,
-          className,
+          className: isActive ? 'monaco-error-line-highlight-active' : 'monaco-error-line-highlight',
           overviewRuler: {
-            color: isErr ? '#ef4444' : isActive ? '#f87171' : '#fb7185',
+            color: '#ef4444',
             position: monaco.editor.OverviewRulerLane.Full,
           },
         },
       };
     });
 
-    const errorTokenDecorations = aiSuggestions
-      .filter((finding) => isErrorFinding(finding) && finding.lineNumber && finding.startCol)
-      .map((finding) => {
-        const startLine = Math.max(1, finding.lineNumber as number);
-        const endLine = finding.endLineNumber && finding.endLineNumber >= startLine ? finding.endLineNumber : startLine;
-        const startColumn = Math.max(1, finding.startCol as number);
-        const endColumn = finding.endCol && finding.endCol > startColumn ? finding.endCol : startColumn + 1;
+    // Inline token highlights ONLY for confirmed errors
+    const errorTokenDecorations = mappedErrorItems
+      .filter(({ finding }) => Boolean(finding.startCol))
+      .map(({ finding, line }) => {
+        const endLine = finding.endLineNumber && finding.endLineNumber >= line && finding.endLineNumber <= codeLines.length ? finding.endLineNumber : line;
+        const maxCol = model ? model.getLineMaxColumn(line) : 100;
+        const startColumn = Math.min(maxCol, Math.max(1, finding.startCol as number));
+        const endColumn = finding.endCol && finding.endCol > startColumn ? Math.min(maxCol, finding.endCol) : Math.min(maxCol, startColumn + 1);
 
         return {
-          range: new monaco.Range(startLine, startColumn, endLine, endColumn),
+          range: new monaco.Range(line, startColumn, endLine, endColumn),
           options: {
             inlineClassName: 'monaco-error-token-highlight',
           },
         };
       });
 
+    // Level 3 optimized code diff markers (blue/cyan)
     const optimizedDecorations = modifiedLines
-      .filter((lineNumber) => !affectedLines.includes(lineNumber))
+      .filter((lineNumber) => !errorLineSet.has(lineNumber))
       .map((lineNumber) => ({
         range: new monaco.Range(lineNumber, 1, lineNumber, 1),
         options: {
@@ -1015,35 +1184,31 @@ const ReviewPage = () => {
       }));
 
     decorationIdsRef.current = editor.deltaDecorations(decorationIdsRef.current, [
-      ...suggestionDecorations,
+      ...errorLineDecorations,
       ...errorTokenDecorations,
       ...optimizedDecorations,
     ]);
 
-    const model = editor.getModel();
     if (model) {
-      const markers = aiSuggestions
-        .filter((finding) => isErrorFinding(finding))
-        .map((finding) => {
-          const line = Math.min(model.getLineCount(), Math.max(1, finding.lineNumber ?? 1));
-          const endLine = Math.min(model.getLineCount(), Math.max(line, finding.endLineNumber ?? line));
-          const maxCol = model.getLineMaxColumn(line);
-          const maxEndCol = model.getLineMaxColumn(endLine);
-          const startColumn = Math.min(maxCol, Math.max(1, finding.startCol ?? 1));
-          const endColumn = Math.min(maxEndCol, Math.max(startColumn + 1, finding.endCol ?? maxEndCol));
-          return {
-            startLineNumber: line,
-            startColumn,
-            endLineNumber: endLine,
-            endColumn,
-            message: `[Error] ${finding.description || finding.title}\nWhy: ${finding.whyItMatters}\nFix: ${finding.suggestedFix}`,
-            severity: monaco.MarkerSeverity.Error,
-            source: 'CodeSense AI Error Detector',
-          };
-        });
+      const markers = mappedErrorItems.map(({ finding, line }) => {
+        const endLine = Math.min(model.getLineCount(), Math.max(line, finding.endLineNumber ?? line));
+        const maxCol = model.getLineMaxColumn(line);
+        const maxEndCol = model.getLineMaxColumn(endLine);
+        const startColumn = Math.min(maxCol, Math.max(1, finding.startCol ?? 1));
+        const endColumn = Math.min(maxEndCol, Math.max(startColumn + 1, finding.endCol ?? maxEndCol));
+        return {
+          startLineNumber: line,
+          startColumn,
+          endLineNumber: endLine,
+          endColumn,
+          message: `[Error] ${finding.description || finding.title}\nWhy: ${finding.whyItMatters}\nFix: ${finding.suggestedFix}`,
+          severity: monaco.MarkerSeverity.Error,
+          source: 'CodeSense AI Error Detector',
+        };
+      });
       monaco.editor.setModelMarkers(model, 'codesense-errors', markers);
     }
-  }, [affectedLines, activeLine, modifiedLines, code, aiSuggestions]);
+  }, [level1Errors, activeLine, modifiedLines, codeLines]);
 
   const handleCopyOptimizedCode = async () => {
     try {
@@ -1162,7 +1327,7 @@ const ReviewPage = () => {
               theme="vs-dark"
               language={language === 'plaintext' ? 'plaintext' : language}
               value={code}
-              onChange={(value) => setCode(value ?? '')}
+              onChange={(value) => handleCodeChange(value ?? '')}
               onMount={handleEditorMount}
               options={{
                 minimap: { enabled: false },
@@ -1274,23 +1439,9 @@ const ReviewPage = () => {
                                   {formatLineRangeLabel(finding.lineNumber, finding.endLineNumber)}
                                 </span>
                               </div>
-                              <div className="space-y-1.5 text-xs">
-                                <p className="text-slate-100 font-medium leading-snug">
-                                  {oneLineText(finding.description || finding.title)}
-                                </p>
-                                {finding.whyItMatters && (
-                                  <div>
-                                    <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Why:</p>
-                                    <p className="text-slate-300 leading-snug">{oneLineText(finding.whyItMatters)}</p>
-                                  </div>
-                                )}
-                                <div>
-                                  <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Fix:</p>
-                                  <p className="text-emerald-300 font-mono text-[11px] bg-slate-900/80 px-2 py-1 rounded border border-emerald-500/20 leading-snug">
-                                    {oneLineText(finding.suggestedFix)}
-                                  </p>
-                                </div>
-                              </div>
+                              <p className="text-xs text-slate-100 font-medium leading-snug">
+                                {oneLineText(finding.description || finding.title)}
+                              </p>
                             </button>
                           ))}
                         </div>
@@ -1378,6 +1529,15 @@ const ReviewPage = () => {
                           <div className="flex items-center justify-between border-b border-slate-800 px-2 py-1.5">
                             <span className="text-[10px] font-semibold uppercase tracking-wider text-cyan-300">Optimized Code</span>
                             <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={handleApplyLevel3Solution}
+                                disabled={loading}
+                                className="inline-flex items-center gap-1 rounded border border-cyan-500/40 bg-cyan-500/10 px-2 py-0.5 text-[10px] font-semibold text-cyan-300 hover:bg-cyan-500/20 active:scale-95 transition disabled:opacity-50"
+                              >
+                                <Sparkles className="h-3 w-3" />
+                                Apply &amp; Re-analyze
+                              </button>
                               <button
                                 type="button"
                                 onClick={handleCopyOptimizedCode}
