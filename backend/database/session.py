@@ -56,5 +56,14 @@ def verify_connection() -> None:
 
 def init_db() -> None:
     from app.models.user import User  # noqa: F401
+    from app.models.review import Review  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
+    try:
+        with engine.connect() as conn:
+            conn.execute(text('ALTER TABLE reviews ADD COLUMN IF NOT EXISTS report_json TEXT;'))
+            conn.commit()
+    except Exception:
+        pass
+
+

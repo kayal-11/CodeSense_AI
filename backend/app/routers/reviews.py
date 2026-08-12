@@ -1,7 +1,10 @@
+from datetime import datetime, timezone
+import json
 from typing import Any
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 import logging
+from sqlalchemy.orm import Session
 
 from app.analysis.static_analyzer import analyze_code
 from app.analysis.review_workflow import (
@@ -17,6 +20,7 @@ from app.analysis.review_workflow import (
     split_issue_buckets,
 )
 from app.services.llm_service import LLMService
+from database.session import get_db
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -26,9 +30,12 @@ class ReviewRequest(BaseModel):
     code: str
     language: str = 'python'
     analysis_profile: str = 'standard-v1'
+    filename: str | None = None
+    review_id: int | None = None
 
 
 class ReviewResponse(BaseModel):
+    id: int | None = None
     summary: str
     issues: list[dict[str, Any]] = []
     score: int
@@ -50,13 +57,16 @@ class ReviewResponse(BaseModel):
     cached: bool = False
 
 
+
 # Helper dependency to inject LLMService
 def get_llm_service() -> LLMService:
     return LLMService()
 
 
 from app.models.user import User
+from app.models.review import Review
 from app.services.auth_service import get_current_user
+
 
 
 ANALYSIS_CACHE: dict[str, tuple[str, ReviewResponse]] = {}
@@ -150,10 +160,77 @@ def _fallback_review_response(message: str, source_hash: str = '', source_code: 
     )
 
 
+@router.get('/history')
+async def get_review_history(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict[str, Any]]:
+    query = db.query(Review)
+    if current_user:
+        query = query.filter(Review.user_id == current_user.id)
+    reviews = query.order_by(Review.created_at.desc()).all()
+    results: list[dict[str, Any]] = []
+    for r in reviews:
+        report_data = None
+        if r.report_json:
+            try:
+                report_data = json.loads(r.report_json)
+            except Exception:
+                pass
+        results.append({
+            'id': r.id,
+            'filename': r.filename,
+            'name': r.filename,
+            'language': r.language,
+            'score': r.score,
+            'risk': r.risk,
+            'findings_count': r.findings_count,
+            'summary': r.summary,
+            'code': r.code or '',
+            'report': report_data,
+            'created_at': r.created_at.isoformat() if r.created_at else None,
+        })
+    return results
+
+
+@router.get('/{review_id}')
+async def get_review_detail(
+    review_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    query = db.query(Review).filter(Review.id == review_id)
+    if current_user:
+        query = query.filter(Review.user_id == current_user.id)
+    r = query.first()
+    if not r:
+        raise HTTPException(status_code=404, detail='Review not found')
+    report_data = None
+    if r.report_json:
+        try:
+            report_data = json.loads(r.report_json)
+        except Exception:
+            pass
+    return {
+        'id': r.id,
+        'filename': r.filename,
+        'name': r.filename,
+        'language': r.language,
+        'score': r.score,
+        'risk': r.risk,
+        'findings_count': r.findings_count,
+        'summary': r.summary,
+        'code': r.code or '',
+        'report': report_data,
+        'created_at': r.created_at.isoformat() if r.created_at else None,
+    }
+
+
 @router.post('/', response_model=ReviewResponse)
 async def review_code(
     payload: ReviewRequest,
     service: LLMService = Depends(get_llm_service),
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ReviewResponse:
     normalized_language = normalize_language(payload.language)
@@ -162,7 +239,7 @@ async def review_code(
     cache_key = source_hash
 
     cached_entry = ANALYSIS_CACHE.get(cache_key)
-    if cached_entry and cached_entry[0] == settings_hash:
+    if cached_entry and cached_entry[0] == settings_hash and not payload.review_id:
         cached_response = cached_entry[1].model_copy(deep=True)
         cached_response.cached = True
         return cached_response
@@ -245,9 +322,81 @@ async def review_code(
             cached=False,
         )
 
+        # Calculate risk based on highest severity issue present
+        critical_cnt = breakdown.get('critical', 0)
+        high_cnt = breakdown.get('high', 0)
+        medium_cnt = breakdown.get('medium', 0)
+        if critical_cnt > 0:
+            risk = 'Critical'
+        elif high_cnt > 0:
+            risk = 'High'
+        elif medium_cnt > 0:
+            risk = 'Medium'
+        else:
+            risk = 'Low'
+
+        fname = (payload.filename or '').strip()
+        if not fname:
+            fname = f"example.{payload.language}"
+
+        serialized_report = json.dumps(response_payload.model_dump())
+        now_time = datetime.now(timezone.utc)
+
+        target_review = None
+        if payload.review_id:
+            query = db.query(Review).filter(Review.id == payload.review_id)
+            if current_user:
+                query = query.filter(Review.user_id == current_user.id)
+            target_review = query.first()
+
+        if not target_review and current_user:
+            # Check for existing review with exact same filename & code for this user to avoid duplicates
+            target_review = db.query(Review).filter(
+                Review.user_id == current_user.id,
+                Review.filename == fname,
+                Review.code == payload.code
+            ).first()
+
+        try:
+            if target_review:
+                target_review.filename = fname
+                target_review.language = normalized_language
+                target_review.score = score
+                target_review.risk = risk
+                target_review.findings_count = len(normalized_issues)
+                target_review.summary = summary
+                target_review.code = payload.code
+                target_review.report_json = serialized_report
+                target_review.created_at = now_time
+                db.commit()
+                db.refresh(target_review)
+                response_payload.id = target_review.id
+            else:
+                db_review = Review(
+                    user_id=current_user.id if current_user else None,
+                    filename=fname,
+                    language=normalized_language,
+                    score=score,
+                    risk=risk,
+                    findings_count=len(normalized_issues),
+                    summary=summary,
+                    code=payload.code,
+                    report_json=serialized_report,
+                    created_at=now_time,
+                )
+                db.add(db_review)
+                db.commit()
+                db.refresh(db_review)
+                response_payload.id = db_review.id
+        except Exception as db_exc:
+            logger.exception('Failed to save review into database: %s', db_exc)
+            db.rollback()
+
         _store_cache_entry(cache_key, settings_hash, response_payload.model_copy(deep=True))
         return response_payload
+
     except Exception as exc:
         logger.exception('Review pipeline failed. Returning fallback response: %s', exc)
         return _fallback_review_response('The analysis service encountered a temporary error and switched to fallback mode.', source_hash=source_hash, source_code=payload.code)
+
 

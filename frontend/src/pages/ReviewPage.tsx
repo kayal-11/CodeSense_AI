@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { useLocation } from 'react-router-dom';
 import Editor, { type OnMount } from '@monaco-editor/react';
 import type { editor as MonacoEditor } from 'monaco-editor';
 import { motion } from 'framer-motion';
 import axios from 'axios';
 import { detectLanguage } from '../utils/languageDetection';
 import { deriveComplexity } from '../utils/complexityAnalysis';
-import { Copy, Download, Sparkles, Upload } from 'lucide-react';
+import { Copy, Download, Save, Sparkles, Upload } from 'lucide-react';
 import { detectSyntaxErrors, recalculateFindingLine } from '../utils/syntaxChecker';
 
 const configuredApiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim();
@@ -229,6 +230,7 @@ interface Issue {
 }
 
 interface ReviewResponse {
+  id?: number;
   summary: string;
   issues: Issue[];
   score: number;
@@ -632,6 +634,9 @@ const computeModifiedLines = (original: string, optimized: string): number[] => 
 };
 
 const ReviewPage = () => {
+  const location = useLocation();
+  const [activeReviewId, setActiveReviewId] = useState<number | null>(null);
+  const [saveSuccess, setSaveSuccess] = useState(false);
   const [code, setCode] = useState(LANGUAGE_TEMPLATES[DEFAULT_LANGUAGE].sampleCode);
   const [fileNameHint, setFileNameHint] = useState(LANGUAGE_TEMPLATES[DEFAULT_LANGUAGE].fileName);
   const [language, setLanguage] = useState<SupportedLanguage>(DEFAULT_LANGUAGE);
@@ -690,6 +695,13 @@ const ReviewPage = () => {
 
   const handleCodeChange = useCallback((newCode: string) => {
     setCode(newCode);
+    try {
+      const savedStateStr = localStorage.getItem('codesense_saved_editor');
+      const savedState = savedStateStr ? JSON.parse(savedStateStr) : {};
+      savedState.code = newCode;
+      localStorage.setItem('codesense_saved_editor', JSON.stringify(savedState));
+    } catch {}
+
     if (newCode !== lastAnalyzedCodeRef.current && lastAnalyzedCodeRef.current !== '') {
       clearAnalysisStateAndHighlights();
       lastAnalyzedCodeRef.current = '';
@@ -900,14 +912,29 @@ const ReviewPage = () => {
       const response = await axios.post<ReviewResponse>(apiUrl('/review/'), {
         code,
         language,
+        filename: fileNameHint,
+        review_id: activeReviewId,
         analysis_profile: 'standard-v1',
       }, {
         headers: authHeaders(),
       });
       const payload = response.data;
+      if (payload.id) {
+        setActiveReviewId(payload.id);
+      }
       localAnalysisCache.current.set(cacheKey, payload);
       applyReviewPayload(payload, { localHash: sourceHash });
       lastAnalyzedCodeRef.current = code;
+
+      try {
+        localStorage.setItem('codesense_saved_editor', JSON.stringify({
+          code,
+          fileNameHint,
+          language,
+          activeReviewId: payload.id || activeReviewId,
+          payload,
+        }));
+      } catch {}
     } catch (err: any) {
       console.error('Error running code review:', err);
       const statusCode = Number(err?.response?.status ?? 0);
@@ -946,7 +973,7 @@ const ReviewPage = () => {
 
   const realTimeSyntaxErrors = useMemo(() => detectSyntaxErrors(code, language), [code, language]);
 
-  const { aiSuggestions, level1Errors, improvements } = useMemo(() => {
+  const { level1Errors, improvements } = useMemo(() => {
     const deduped = new Map<string, FindingCard>();
     findings.forEach((finding) => {
       if (!isActionableSuggestion(finding)) return;
@@ -977,8 +1004,10 @@ const ReviewPage = () => {
 
     const mergedErrorsMap = new Map<string, FindingCard>();
     allErrorsToProcess.forEach((err) => {
-      // Determine the actual error line from the current code, recalculating dynamically whenever code changes
-      const calculatedLine = recalculateFindingLine(err, codeLines) ?? getValidErrorLineNumber(err.lineNumber, codeLines);
+      // Use the exact line number where each detected error actually occurs in current source code
+      const calculatedLine = (err.lineNumber && err.lineNumber >= 1 && err.lineNumber <= codeLines.length)
+        ? err.lineNumber
+        : (recalculateFindingLine(err, codeLines, code, language) ?? getValidErrorLineNumber(err.lineNumber, codeLines));
       if (!calculatedLine) return; // Skip stale errors whose target code no longer exists or is empty
 
       const updatedErr = { ...err, lineNumber: calculatedLine };
@@ -1014,19 +1043,6 @@ const ReviewPage = () => {
     };
   }, [findings, codeLines, realTimeSyntaxErrors]);
 
-  const affectedLines = useMemo(() => {
-    const expanded = new Set<number>();
-    aiSuggestions.forEach((finding) => {
-      if (!finding.lineNumber) return;
-      const start = finding.lineNumber;
-      const end = finding.endLineNumber && finding.endLineNumber >= start ? finding.endLineNumber : start;
-      for (let line = start; line <= end; line += 1) {
-        expanded.add(line);
-      }
-    });
-    return Array.from(expanded).sort((a, b) => a - b);
-  }, [aiSuggestions]);
-
   const optimizedCodeForLevel3 = useMemo(() => {
     const raw =
       learningAssistant?.level_3_optimized_solution?.code?.trim() ||
@@ -1048,6 +1064,11 @@ const ReviewPage = () => {
   const handleEditorMount: OnMount = useCallback((editor, monaco) => {
     editorRef.current = editor;
     monacoRef.current = monaco;
+    decorationIdsRef.current = editor.deltaDecorations([], []);
+    const model = editor.getModel();
+    if (model) {
+      monaco.editor.setModelMarkers(model, 'codesense-errors', []);
+    }
   }, []);
 
   const scrollToLine = useCallback((lineNumber: number | null) => {
@@ -1117,14 +1138,6 @@ const ReviewPage = () => {
 
     const model = editor.getModel();
 
-    if (level1Errors.length === 0) {
-      decorationIdsRef.current = editor.deltaDecorations(decorationIdsRef.current, []);
-      if (model) {
-        monaco.editor.setModelMarkers(model, 'codesense-errors', []);
-      }
-      return;
-    }
-
     // Map each confirmed Level 1 error to its exact verified line
     const mappedErrorItems: Array<{ finding: FindingCard; line: number }> = [];
     level1Errors.forEach((finding) => {
@@ -1132,6 +1145,14 @@ const ReviewPage = () => {
         mappedErrorItems.push({ finding, line: finding.lineNumber });
       }
     });
+
+    if (mappedErrorItems.length === 0) {
+      decorationIdsRef.current = editor.deltaDecorations(decorationIdsRef.current, []);
+      if (model) {
+        monaco.editor.setModelMarkers(model, 'codesense-errors', []);
+      }
+      return;
+    }
 
     const errorLineSet = new Set(mappedErrorItems.map((item) => item.line));
 
@@ -1235,6 +1256,135 @@ const ReviewPage = () => {
     URL.revokeObjectURL(objectUrl);
   };
 
+  useEffect(() => {
+    const historyReview = location.state?.review;
+    if (historyReview) {
+      if (historyReview.id) setActiveReviewId(historyReview.id);
+      if (historyReview.code) setCode(historyReview.code);
+      if (historyReview.filename || historyReview.name) setFileNameHint(historyReview.filename || historyReview.name);
+      if (historyReview.language && isSupportedLanguage(historyReview.language)) {
+        setLanguage(historyReview.language as SupportedLanguage);
+      }
+
+      if (historyReview.report) {
+        applyReviewPayload(historyReview.report, { fromCache: true });
+      } else if (historyReview.id) {
+        axios.get(apiUrl(`/review/${historyReview.id}`), { headers: authHeaders() })
+          .then((res) => {
+            if (res.data.code) setCode(res.data.code);
+            if (res.data.filename) setFileNameHint(res.data.filename);
+            if (res.data.language && isSupportedLanguage(res.data.language)) {
+              setLanguage(res.data.language as SupportedLanguage);
+            }
+            if (res.data.report) {
+              applyReviewPayload(res.data.report, { fromCache: true });
+            }
+          })
+          .catch((err) => console.error("Failed to load review details:", err));
+      }
+      return;
+    }
+
+    try {
+      const savedStateStr = localStorage.getItem('codesense_saved_editor');
+      if (savedStateStr) {
+        const savedState = JSON.parse(savedStateStr);
+        if (savedState.code) setCode(savedState.code);
+        if (savedState.fileNameHint) setFileNameHint(savedState.fileNameHint);
+        if (savedState.language && isSupportedLanguage(savedState.language)) {
+          setLanguage(savedState.language as SupportedLanguage);
+        }
+        if (savedState.activeReviewId) setActiveReviewId(savedState.activeReviewId);
+        if (savedState.payload) {
+          applyReviewPayload(savedState.payload, { fromCache: true });
+        }
+      }
+    } catch {
+      // Ignore parse error
+    }
+  }, [location.state]);
+
+  const handleSaveEditorState = () => {
+    try {
+      const stateToSave = {
+        code,
+        fileNameHint,
+        language,
+        activeReviewId,
+        payload: {
+          summary,
+          issues: findings,
+          score,
+          overall_score: score,
+          bugs: findings.filter((f) => f.category === 'Bug'),
+          security_vulnerabilities: findings.filter((f) => f.category === 'Security'),
+          performance_issues: findings.filter((f) => f.category === 'Performance'),
+          code_smells: findings.filter((f) => f.category === 'Code Smell'),
+          complexity_analysis: complexityAnalysis,
+          refactored_code: refactoredCode,
+          severity_breakdown: severityBreakdown,
+          learning_assistant: learningAssistant,
+        },
+      };
+      localStorage.setItem('codesense_saved_editor', JSON.stringify(stateToSave));
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 1500);
+    } catch (err) {
+      console.error('Failed to save editor state:', err);
+    }
+  };
+
+  const handleExportReport = () => {
+    const template = templateForLanguage(language);
+    const baseName = fileNameHint.trim() || template.fileName;
+    const suffixIdx = baseName.lastIndexOf('.');
+    const nameWithoutExt = suffixIdx >= 0 ? baseName.slice(0, suffixIdx) : baseName;
+    const exportFileName = `${nameWithoutExt}_review_report.md`;
+
+    const timeString = new Date().toLocaleString();
+
+    let reportText = `# CodeSense AI Review Report\n\n`;
+    reportText += `- **Filename:** ${baseName}\n`;
+    reportText += `- **Language:** ${detectedLanguage} (${language})\n`;
+    reportText += `- **Timestamp:** ${timeString}\n`;
+    reportText += `- **Overall Score:** ${score !== null ? `${score}/100` : 'Pending'}\n`;
+    reportText += `- **Summary:** ${summary}\n\n`;
+
+    reportText += `## Audit Summary\n`;
+    reportText += `- **Correctness:** ${auditSummary.correctness}\n`;
+    reportText += `- **Complexity:** ${auditSummary.complexity}\n`;
+    reportText += `- **Security:** ${auditSummary.security}\n`;
+    reportText += `- **Verdict:** ${auditSummary.verdict}\n\n`;
+
+    reportText += `## Findings & Issues (${findings.length})\n`;
+    if (findings.length === 0) {
+      reportText += `No issues detected in current code.\n\n`;
+    } else {
+      findings.forEach((finding, idx) => {
+        reportText += `### ${idx + 1}. [${finding.severity.toUpperCase()}] ${finding.title}\n`;
+        if (finding.lineNumber) {
+          reportText += `- **Location:** Line ${finding.lineNumber}\n`;
+        }
+        reportText += `- **Category:** ${finding.category}\n`;
+        reportText += `- **Description:** ${finding.description}\n`;
+        reportText += `- **Why it matters:** ${finding.whyItMatters}\n`;
+        reportText += `- **Suggested fix:** ${finding.suggestedFix}\n\n`;
+      });
+    }
+
+    reportText += `## Source Code\n\`\`\`${language}\n${code}\n\`\`\`\n`;
+
+    const blob = new Blob([reportText], { type: 'text/markdown;charset=utf-8' });
+    const objectUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = objectUrl;
+    anchor.download = exportFileName;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(objectUrl);
+  };
+
   return (
     <div className="space-y-6">
       {error && (
@@ -1315,11 +1465,31 @@ const ReviewPage = () => {
             </div>
           </div>
           <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-            <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200 hover:border-cyan-500">
-              <Upload className="h-4 w-4 text-cyan-300" />
-              Upload source file
-              <input type="file" className="hidden" onChange={handleFileUpload} accept=".py,.java,.js,.ts,.c,.cpp,.cc,.cxx,.cs,.go,.rs,.txt" />
-            </label>
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200 hover:border-cyan-500 transition">
+                <Upload className="h-4 w-4 text-cyan-300" />
+                Upload source file
+                <input type="file" className="hidden" onChange={handleFileUpload} accept=".py,.java,.js,.ts,.c,.cpp,.cc,.cxx,.cs,.go,.rs,.txt" />
+              </label>
+              <button
+                type="button"
+                onClick={handleSaveEditorState}
+                className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200 hover:border-cyan-500 hover:text-cyan-300 transition"
+                title="Save editor content and state"
+              >
+                <Save className="h-4 w-4 text-cyan-300" />
+                {saveSuccess ? 'Saved!' : 'Save'}
+              </button>
+              <button
+                type="button"
+                onClick={handleExportReport}
+                className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200 hover:border-cyan-500 hover:text-cyan-300 transition"
+                title="Export current code & review report"
+              >
+                <Download className="h-4 w-4 text-cyan-300" />
+                Export
+              </button>
+            </div>
             <p className="text-[11px] text-slate-400">Extension is checked first, then syntax is validated for confidence.</p>
           </div>
           <div className="h-[min(420px,42vh)] min-h-[280px] overflow-hidden rounded-xl border border-slate-800">
@@ -1489,9 +1659,9 @@ const ReviewPage = () => {
                   <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-2">3-Level Learning Assistant</p>
                   <div className="flex gap-1 mb-2">
                     {([
-                      { level: 1 as const, label: '🟢 Level 1', tone: 'border-emerald-500/40 text-emerald-300' },
+                      { level: 1 as const, label: '🔴 Level 1', tone: 'border-red-500/40 text-red-300' },
                       { level: 2 as const, label: '🟡 Level 2', tone: 'border-amber-500/40 text-amber-300' },
-                      { level: 3 as const, label: '🔴 Level 3', tone: 'border-rose-500/40 text-rose-300' },
+                      { level: 3 as const, label: '🔵 Level 3', tone: 'border-cyan-500/40 text-cyan-300' },
                     ]).map(({ level, label, tone }) => (
                       <button
                         key={level}
@@ -1507,7 +1677,7 @@ const ReviewPage = () => {
                   </div>
 
                   {assistantViewLevel === 1 && (
-                    <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-2.5 text-xs text-slate-200 leading-relaxed">
+                    <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-2.5 text-xs text-slate-200 leading-relaxed">
                       {learningAssistant?.level_1_hint?.[0] || 'Check collection lookups and boundary checks.'}
                     </div>
                   )}

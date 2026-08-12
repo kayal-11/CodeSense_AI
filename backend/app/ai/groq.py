@@ -198,14 +198,26 @@ class GroqProvider(BaseAIProvider):
             '    "Improve exception handling"\n'
             '  ],\n'
             '  "verdict": "Production-ready with minor improvements.", // 1 concise sentence\n'
-            '  "is_already_optimal": false, // boolean: true if current code is optimal\n'
+            "  \"is_already_optimal\": false, // boolean: true if current code is optimal\n"
+            "  \"issues\": [\n"
+            "    {\n"
+            '      "type": "Syntax Error",\n'
+            '      "severity": "critical",\n'
+            '      "message": "Missing colon at end of statement",\n'
+            '      "line": 7, // Integer: EXACT ROOT-CAUSE line where developer fix is required\n'
+            '      "why_it_matters": "Missing colon breaks statement syntax.",\n'
+            '      "suggested_fix": "Add colon to statement.",\n'
+            '      "is_error": true,\n'
+            '      "level": "Level 1"\n'
+            "    }\n"
+            "  ],\n"
             '  "optimized_code": "Return ONLY complete compilable source code with proper indentation and line breaks. Never minify or compress the code into one line. Every class, method, brace, and statement must be formatted exactly as in a professional IDE. Do not include markdown fences.", // empty if is_already_optimal\n'
             '  "level_1_hint": "Check hash map lookup efficiency for linear time complexity.",\n'
             '  "level_2_approach": "Scan the collection once while storing complements in hash table.",\n'
             '  "level_3_solution_summary": "Linear time complexity solution using hash map for O(1) lookups."\n'
             "}\n"
             "CRITICAL RULES:\n"
-            "0. FIRST, check if code contains actual errors (syntax, compilation, runtime, undefined variables, missing imports, type mismatches, incorrect method calls). Prioritize reporting actual errors over minor improvements.\n"
+            "0. ROOT-CAUSE ERROR ANALYSIS: Use static analyzer diagnostics as initial evidence. Evaluate full source code context to identify the EXACT ROOT-CAUSE LINE where the developer needs to make the fix. Never report a cascading line (e.g. line 19) when the root error occurred earlier (e.g. line 7).\n"
             "1. Keep all text ultra-concise (1 line per section).\n"
             "2. top_fixes MUST contain 2 to 3 short bullet points highlighting detected errors or key fixes.\n"
             "3. If code is already optimal, set is_already_optimal=true and optimized_code=\"\".\n"
@@ -363,7 +375,7 @@ class GroqProvider(BaseAIProvider):
                         "suggested_fixes": top_fixes_raw[:3],
                         "documentation_suggestions": [],
                         "unit_test_suggestions": [],
-                        "issues": [],
+                        "issues": result.get("issues", []) if isinstance(result.get("issues", []), list) else [],
                     }
 
                     return normalized
