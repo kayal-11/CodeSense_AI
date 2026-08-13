@@ -1409,11 +1409,11 @@ const ReviewPage = () => {
         </button>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr] xl:items-start">
+      <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr] xl:items-stretch">
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
-          className="rounded-2xl border border-slate-800 bg-slate-900/80 p-3 shadow-glow lg:p-4"
+          className="rounded-2xl border border-slate-800 bg-slate-900/80 p-3 shadow-glow flex flex-col lg:p-4 h-full xl:max-h-[min(720px,calc(100vh-9rem))] xl:min-h-[580px]"
         >
           <div className="mb-3 flex items-center justify-between">
             <h2 className="text-lg font-semibold text-white">Editor</h2>
@@ -1492,7 +1492,7 @@ const ReviewPage = () => {
             </div>
             <p className="text-[11px] text-slate-400">Extension is checked first, then syntax is validated for confidence.</p>
           </div>
-          <div className="h-[min(420px,42vh)] min-h-[280px] overflow-hidden rounded-xl border border-slate-800">
+          <div className="flex-1 min-h-[300px] overflow-hidden rounded-xl border border-slate-800">
             <Editor
               theme="vs-dark"
               language={language === 'plaintext' ? 'plaintext' : language}
@@ -1506,6 +1506,7 @@ const ReviewPage = () => {
                 lineNumbersMinChars: 3,
                 glyphMargin: true,
                 renderLineHighlight: 'all',
+                automaticLayout: true,
               }}
             />
           </div>
@@ -1514,7 +1515,7 @@ const ReviewPage = () => {
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
-          className="rounded-2xl border border-slate-800 bg-slate-900/80 p-3 shadow-glow flex flex-col lg:p-4 max-h-[min(720px,calc(100vh-9rem))]"
+          className="rounded-2xl border border-slate-800 bg-slate-900/80 p-3 shadow-glow flex flex-col lg:p-4 h-full xl:max-h-[min(720px,calc(100vh-9rem))] xl:min-h-[580px]"
         >
           <div className="flex items-center justify-between border-b border-slate-800 pb-3 mb-3 shrink-0">
             <h2 className="text-lg font-semibold text-white">AI Review</h2>
@@ -1548,7 +1549,7 @@ const ReviewPage = () => {
         )}
 
         {/* Right Details Sidebar */}
-        <div className="flex-1 rounded-2xl border border-slate-800 bg-slate-950 p-4 space-y-4 overflow-y-auto max-h-[850px] shadow-2xl">
+        <div className="flex-1 min-h-0 rounded-2xl border border-slate-800 bg-slate-950 p-4 space-y-4 overflow-y-auto shadow-2xl">
           <div className="flex items-center justify-between border-b border-slate-800 pb-3">
             <h2 className="text-base font-semibold text-white">AI Analysis &amp; Findings</h2>
             {wasCached && (
