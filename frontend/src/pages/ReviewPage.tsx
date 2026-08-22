@@ -577,7 +577,7 @@ const ReviewPage = () => {
   const [severityBreakdown, setSeverityBreakdown] = useState<Record<string, number>>({ critical: 0, high: 0, medium: 0, low: 0 });
   const [analysisHash, setAnalysisHash] = useState('');
   const [wasCached, setWasCached] = useState(false);
-  const [assistantViewLevel, setAssistantViewLevel] = useState<1 | 2 | 3>(1);
+  //const [assistantViewLevel, setAssistantViewLevel] = useState<1 | 2 | 3>(1);
   const [learningAssistant, setLearningAssistant] = useState<ReviewResponse['learning_assistant']>({});
   const [complexityAnalysis, setComplexityAnalysis] = useState('');
   const [refactoredCode, setRefactoredCode] = useState('');
