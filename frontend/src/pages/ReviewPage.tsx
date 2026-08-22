@@ -13,7 +13,7 @@ const configuredApiBase = (import.meta.env.VITE_API_BASE_URL as string | undefin
 const API_BASE = configuredApiBase && configuredApiBase.length > 0 ? configuredApiBase.replace(/\/$/, '') : '/api';
 const apiUrl = (path: string): string => `${API_BASE}${path.startsWith('/') ? path : `/${path}`}`;
 
-type SupportedLanguage = 'python' | 'java' | 'javascript' | 'typescript' | 'c' | 'cpp' | 'csharp' | 'go' | 'rust' | 'plaintext';
+type SupportedLanguage = 'c' | 'cpp' | 'java' | 'python';
 
 interface LanguageTemplate {
   label: string;
@@ -53,38 +53,6 @@ public class Example {
         }
         return new int[]{};
     }
-}
-`,
-  },
-  javascript: {
-    label: 'JavaScript',
-    fileName: 'example.js',
-    sampleCode: `function twoSum(nums, target) {
-  const seen = new Map();
-  for (let i = 0; i < nums.length; i += 1) {
-    const needed = target - nums[i];
-    if (seen.has(needed)) {
-      return [seen.get(needed), i];
-    }
-    seen.set(nums[i], i);
-  }
-  return [];
-}
-`,
-  },
-  typescript: {
-    label: 'TypeScript',
-    fileName: 'example.ts',
-    sampleCode: `export function twoSum(nums: number[], target: number): [number, number] | [] {
-  const seen = new Map<number, number>();
-  for (let i = 0; i < nums.length; i += 1) {
-    const needed = target - nums[i];
-    if (seen.has(needed)) {
-      return [seen.get(needed) as number, i];
-    }
-    seen.set(nums[i], i);
-  }
-  return [];
 }
 `,
   },
@@ -129,70 +97,9 @@ std::vector<int> twoSum(const std::vector<int>& nums, int target) {
 }
 `,
   },
-  csharp: {
-    label: 'C#',
-    fileName: 'example.cs',
-    sampleCode: `using System.Collections.Generic;
-
-public static class Example {
-    public static int[] TwoSum(int[] nums, int target) {
-        var seen = new Dictionary<int, int>();
-        for (var i = 0; i < nums.Length; i++) {
-            var needed = target - nums[i];
-            if (seen.TryGetValue(needed, out var index)) {
-                return new[] { index, i };
-            }
-            seen[nums[i]] = i;
-        }
-        return new int[0];
-    }
-}
-`,
-  },
-  go: {
-    label: 'Go',
-    fileName: 'example.go',
-    sampleCode: `package main
-
-func twoSum(nums []int, target int) []int {
-    seen := map[int]int{}
-    for i, value := range nums {
-        needed := target - value
-        if index, ok := seen[needed]; ok {
-            return []int{index, i}
-        }
-        seen[value] = i
-    }
-    return []int{}
-}
-`,
-  },
-  rust: {
-    label: 'Rust',
-    fileName: 'example.rs',
-    sampleCode: `use std::collections::HashMap;
-
-fn two_sum(nums: Vec<i32>, target: i32) -> Vec<usize> {
-    let mut seen: HashMap<i32, usize> = HashMap::new();
-    for (index, value) in nums.iter().enumerate() {
-        let needed = target - value;
-        if let Some(found) = seen.get(&needed) {
-            return vec![*found, index];
-        }
-        seen.insert(*value, index);
-    }
-    vec![]
-}
-`,
-  },
-  plaintext: {
-    label: 'Plain Text',
-    fileName: 'example.txt',
-    sampleCode: 'Paste or upload source code to begin analysis.',
-  },
 };
 
-const DEFAULT_LANGUAGE: SupportedLanguage = 'plaintext';
+const DEFAULT_LANGUAGE: SupportedLanguage = 'python';
 
 const isSupportedLanguage = (value: string): value is SupportedLanguage =>
   Object.prototype.hasOwnProperty.call(LANGUAGE_TEMPLATES, value);
@@ -201,7 +108,7 @@ const templateForLanguage = (language: string): LanguageTemplate => {
   if (isSupportedLanguage(language)) {
     return LANGUAGE_TEMPLATES[language];
   }
-  return LANGUAGE_TEMPLATES.plaintext;
+  return LANGUAGE_TEMPLATES.python;
 };
 
 const authHeaders = (): Record<string, string> => {
@@ -229,6 +136,22 @@ interface Issue {
   improved_code?: string;
 }
 
+interface Level1BruteForce {
+  explanation?: string;
+  algorithm?: string | string[];
+  code?: string;
+  time_space_complexity?: string;
+  why_inefficient?: string;
+}
+
+interface Level2BetterApproach {
+  explanation?: string;
+  algorithm?: string | string[];
+  code?: string;
+  time_space_complexity?: string;
+  improvement_over_level_1?: string;
+}
+
 interface ReviewResponse {
   id?: number;
   summary: string;
@@ -250,9 +173,12 @@ interface ReviewResponse {
   learning_assistant?: {
     level_1_hint?: string[];
     level_2_guidance?: string[];
+    level_1_brute_force?: Level1BruteForce;
+    level_2_better_approach?: Level2BetterApproach;
     level_3_optimized_solution?: {
       code?: string;
       is_already_optimal?: boolean;
+      summary?: string;
       explanations?: string[];
       complexity_improvements?: string[];
       best_practices?: string[];
@@ -636,6 +562,7 @@ const computeModifiedLines = (original: string, optimized: string): number[] => 
 const ReviewPage = () => {
   const location = useLocation();
   const [activeReviewId, setActiveReviewId] = useState<number | null>(null);
+  const [problemUrl, setProblemUrl] = useState('');
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [code, setCode] = useState(LANGUAGE_TEMPLATES[DEFAULT_LANGUAGE].sampleCode);
   const [fileNameHint, setFileNameHint] = useState(LANGUAGE_TEMPLATES[DEFAULT_LANGUAGE].fileName);
@@ -712,14 +639,8 @@ const ReviewPage = () => {
     () => [
       { value: 'python', label: LANGUAGE_TEMPLATES.python.label },
       { value: 'java', label: LANGUAGE_TEMPLATES.java.label },
-      { value: 'javascript', label: LANGUAGE_TEMPLATES.javascript.label },
-      { value: 'typescript', label: LANGUAGE_TEMPLATES.typescript.label },
       { value: 'c', label: LANGUAGE_TEMPLATES.c.label },
       { value: 'cpp', label: LANGUAGE_TEMPLATES.cpp.label },
-      { value: 'csharp', label: LANGUAGE_TEMPLATES.csharp.label },
-      { value: 'go', label: LANGUAGE_TEMPLATES.go.label },
-      { value: 'rust', label: LANGUAGE_TEMPLATES.rust.label },
-      { value: 'plaintext', label: LANGUAGE_TEMPLATES.plaintext.label },
     ],
     []
   );
@@ -741,7 +662,7 @@ const ReviewPage = () => {
     setDetectionConfidence(detection.confidence);
     setDetectionReason(detection.reason);
 
-    const autoLanguage = supportedLanguages.has(detection.language) ? detection.language : 'plaintext';
+    const autoLanguage = supportedLanguages.has(detection.language) ? (detection.language as SupportedLanguage) : 'python';
     if (isSupportedLanguage(autoLanguage) && autoLanguage !== language) {
       setLanguage(autoLanguage);
     }
@@ -898,8 +819,9 @@ const ReviewPage = () => {
     setError(null);
     saveEditorCursor();
 
+    const cleanProbUrl = problemUrl.trim();
     const sourceHash = stableCodeHash(code);
-    const cacheKey = `${sourceHash}:${language}:standard-v1`;
+    const cacheKey = `${sourceHash}:${language}:${cleanProbUrl}:standard-v1`;
     const cachedLocal = localAnalysisCache.current.get(cacheKey);
     if (cachedLocal) {
       applyReviewPayload(cachedLocal, { fromCache: true, localHash: sourceHash });
@@ -914,6 +836,7 @@ const ReviewPage = () => {
         language,
         filename: fileNameHint,
         review_id: activeReviewId,
+        problem_url: cleanProbUrl || null,
         analysis_profile: 'standard-v1',
       }, {
         headers: authHeaders(),
@@ -931,6 +854,7 @@ const ReviewPage = () => {
           code,
           fileNameHint,
           language,
+          problemUrl: cleanProbUrl,
           activeReviewId: payload.id || activeReviewId,
           payload,
         }));
@@ -1443,6 +1367,19 @@ const ReviewPage = () => {
               </select>
             </div>
           </div>
+          {/* Problem URL (Optional) Field */}
+          <div className="mb-3">
+            <label className="block text-xs text-slate-400">
+              Problem URL (Optional) — Supports LeetCode and GeeksforGeeks
+              <input
+                type="url"
+                value={problemUrl}
+                onChange={(e) => setProblemUrl(e.target.value)}
+                placeholder="e.g. https://leetcode.com/problems/two-sum or https://www.geeksforgeeks.org/problems/two-sum/1"
+                className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200 outline-none focus:border-cyan-500 placeholder:text-slate-600 transition"
+              />
+            </label>
+          </div>
           <div className="mb-3 grid gap-2 md:grid-cols-[1fr_auto] md:items-center">
             <label className="text-xs text-slate-400">
               Optional filename for extension-based detection
@@ -1583,12 +1520,12 @@ const ReviewPage = () => {
                   <p className="text-xs text-emerald-300">✅ No actionable suggestions. Code looks clean.</p>
                 ) : (
                   <>
-                    {/* Level 1 Errors Section */}
+                    {/* Errors Section */}
                     {level1Errors.length > 0 && (
                       <div className="space-y-2">
                         <div className="flex items-center justify-between">
                           <p className="text-[11px] font-bold text-rose-400 flex items-center gap-1.5 uppercase tracking-wide">
-                            <span>🔴 Level 1 – Errors</span>
+                            <span>🔴 Errors</span>
                             <span className="rounded-full bg-rose-500/20 text-rose-300 px-2 py-0.5 text-[10px] font-semibold">{level1Errors.length}</span>
                           </p>
                         </div>
@@ -1604,10 +1541,7 @@ const ReviewPage = () => {
                             >
                               <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
                                 <span className="rounded border border-red-500/40 bg-red-500/20 px-1.5 py-0.5 text-[10px] font-bold uppercase text-red-200">
-                                  🔴 Level 1 – Error
-                                </span>
-                                <span className="text-[11px] font-semibold text-rose-300">
-                                  {formatLineRangeLabel(finding.lineNumber, finding.endLineNumber)}
+                                  🔴 Error — {formatLineRangeLabel(finding.lineNumber, finding.endLineNumber)}
                                 </span>
                               </div>
                               <p className="text-xs text-slate-100 font-medium leading-snug">
@@ -1655,96 +1589,152 @@ const ReviewPage = () => {
                 )}
               </div>
 
-                {/* 4. 3-Level Learning Assistant */}
-                <div className="rounded-xl border border-cyan-500/25 bg-slate-950/80 p-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-2">3-Level Learning Assistant</p>
-                  <div className="flex gap-1 mb-2">
-                    {([
-                      { level: 1 as const, label: '🔴 Level 1', tone: 'border-red-500/40 text-red-300' },
-                      { level: 2 as const, label: '🟡 Level 2', tone: 'border-amber-500/40 text-amber-300' },
-                      { level: 3 as const, label: '🔵 Level 3', tone: 'border-cyan-500/40 text-cyan-300' },
-                    ]).map(({ level, label, tone }) => (
-                      <button
-                        key={level}
-                        type="button"
-                        onClick={() => setAssistantViewLevel(level)}
-                        className={`flex-1 rounded-lg border px-2 py-1.5 text-[10px] font-semibold transition ${
-                          assistantViewLevel === level ? `${tone} bg-slate-900` : 'border-slate-700 text-slate-400 hover:border-slate-500'
-                        }`}
-                      >
-                        {label}
-                      </button>
-                    ))}
+                {/* LEVEL 1 — BRUTE FORCE */}
+                <div className="rounded-xl border border-rose-500/30 bg-slate-950/90 p-3.5 space-y-2.5">
+                  <div className="flex items-center justify-between border-b border-rose-500/20 pb-2">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-rose-300 flex items-center gap-2">
+                      <span>🔴 LEVEL 1 — BRUTE FORCE</span>
+                    </h3>
+                    <span className="rounded bg-rose-500/20 px-2 py-0.5 text-[10px] font-semibold text-rose-300 border border-rose-500/30">
+                      {learningAssistant?.level_1_brute_force?.time_space_complexity || 'Time: O(N²) | Space: O(1)'}
+                    </span>
+                  </div>
+                  <div className="space-y-1.5 text-xs text-slate-200">
+                    <p><span className="font-semibold text-rose-300">Explanation:</span> {learningAssistant?.level_1_brute_force?.explanation || 'Naive brute force approach checking all combinations or pairs.'}</p>
+                    <div>
+                      <span className="font-semibold text-rose-300">Algorithm:</span>
+                      <div className="mt-1 pl-2 border-l-2 border-rose-500/40 text-slate-300 space-y-0.5 text-[11px] whitespace-pre-line">
+                        {Array.isArray(learningAssistant?.level_1_brute_force?.algorithm)
+                          ? learningAssistant.level_1_brute_force.algorithm.join('\n')
+                          : learningAssistant?.level_1_brute_force?.algorithm || '1. Iterate through elements with nested loops.\n2. Compare combinations step-by-step.\n3. Return result when condition is met.'}
+                      </div>
+                    </div>
+                    {learningAssistant?.level_1_brute_force?.code && (
+                      <div className="mt-2 rounded-lg border border-slate-800 bg-slate-900 p-2 font-mono text-[11px] text-slate-200 overflow-x-auto">
+                        <div className="flex items-center justify-between pb-1 border-b border-slate-800 mb-1.5 text-[10px] text-slate-400">
+                          <span>Code ({language.toUpperCase()})</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (learningAssistant?.level_1_brute_force?.code) {
+                                navigator.clipboard.writeText(learningAssistant.level_1_brute_force.code);
+                              }
+                            }}
+                            className="hover:text-cyan-300 transition"
+                          >
+                            Copy Code
+                          </button>
+                        </div>
+                        <pre className="whitespace-pre-wrap">{learningAssistant.level_1_brute_force.code}</pre>
+                      </div>
+                    )}
+                    <p><span className="font-semibold text-rose-300">Why It Is Inefficient:</span> {learningAssistant?.level_1_brute_force?.why_inefficient || 'Repeated nested loops create quadratic execution overhead.'}</p>
+                  </div>
+                </div>
+
+                {/* LEVEL 2 — BETTER APPROACH */}
+                <div className="rounded-xl border border-amber-500/30 bg-slate-950/90 p-3.5 space-y-2.5">
+                  <div className="flex items-center justify-between border-b border-amber-500/20 pb-2">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-amber-300 flex items-center gap-2">
+                      <span>🟡 LEVEL 2 — BETTER APPROACH</span>
+                    </h3>
+                    <span className="rounded bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold text-amber-300 border border-amber-500/30">
+                      {learningAssistant?.level_2_better_approach?.time_space_complexity || 'Time: O(N log N) | Space: O(N)'}
+                    </span>
+                  </div>
+                  <div className="space-y-1.5 text-xs text-slate-200">
+                    <p><span className="font-semibold text-amber-300">Explanation:</span> {learningAssistant?.level_2_better_approach?.explanation || 'Improved approach using sorting, binary search, or auxiliary maps.'}</p>
+                    <div>
+                      <span className="font-semibold text-amber-300">Algorithm:</span>
+                      <div className="mt-1 pl-2 border-l-2 border-amber-500/40 text-slate-300 space-y-0.5 text-[11px] whitespace-pre-line">
+                        {Array.isArray(learningAssistant?.level_2_better_approach?.algorithm)
+                          ? learningAssistant.level_2_better_approach.algorithm.join('\n')
+                          : learningAssistant?.level_2_better_approach?.algorithm || '1. Sort input array or initialize index structure.\n2. Traverse data in single pass or with binary search.\n3. Return result.'}
+                      </div>
+                    </div>
+                    {learningAssistant?.level_2_better_approach?.code && (
+                      <div className="mt-2 rounded-lg border border-slate-800 bg-slate-900 p-2 font-mono text-[11px] text-slate-200 overflow-x-auto">
+                        <div className="flex items-center justify-between pb-1 border-b border-slate-800 mb-1.5 text-[10px] text-slate-400">
+                          <span>Code ({language.toUpperCase()})</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (learningAssistant?.level_2_better_approach?.code) {
+                                navigator.clipboard.writeText(learningAssistant.level_2_better_approach.code);
+                              }
+                            }}
+                            className="hover:text-cyan-300 transition"
+                          >
+                            Copy Code
+                          </button>
+                        </div>
+                        <pre className="whitespace-pre-wrap">{learningAssistant.level_2_better_approach.code}</pre>
+                      </div>
+                    )}
+                    <p><span className="font-semibold text-amber-300">Improvement Over Level 1:</span> {learningAssistant?.level_2_better_approach?.improvement_over_level_1 || 'Significantly reduces iterations compared to the brute force method.'}</p>
+                  </div>
+                </div>
+
+                {/* LEVEL 3 — EXISTING CONTENT */}
+                <div className="rounded-xl border border-cyan-500/30 bg-slate-950/90 p-3.5 space-y-2.5">
+                  <div className="flex items-center justify-between border-b border-cyan-500/20 pb-2">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-cyan-300 flex items-center gap-2">
+                      <span>🔵 LEVEL 3 — OPTIMAL SOLUTION</span>
+                    </h3>
                   </div>
 
-                  {assistantViewLevel === 1 && (
-                    <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-2.5 text-xs text-slate-200 leading-relaxed">
-                      {learningAssistant?.level_1_hint?.[0] || 'Check collection lookups and boundary checks.'}
+                  {isAlreadyOptimal ? (
+                    <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/10 p-3 text-center text-xs font-medium text-emerald-300">
+                      ✅ Current solution is already optimal.
                     </div>
-                  )}
-
-                  {assistantViewLevel === 2 && (
-                    <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-2.5 text-xs text-slate-200 leading-relaxed">
-                      {learningAssistant?.level_2_guidance?.[0] || 'Single-pass traversal using an auxiliary hash map.'}
-                    </div>
-                  )}
-
-                  {assistantViewLevel === 3 && (
-                    <div className="space-y-2">
-                      {isAlreadyOptimal ? (
-                        <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/10 p-3 text-center text-xs font-medium text-emerald-300">
-                          ✅ Current solution is already optimal.
+                  ) : (
+                    <div className="rounded-lg border border-slate-800 bg-slate-900/90 overflow-hidden">
+                      <div className="flex items-center justify-between border-b border-slate-800 px-2 py-1.5">
+                        <span className="text-[10px] font-semibold uppercase tracking-wider text-cyan-300">Optimized Code</span>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={handleApplyLevel3Solution}
+                            disabled={loading}
+                            className="inline-flex items-center gap-1 rounded border border-cyan-500/40 bg-cyan-500/10 px-2 py-0.5 text-[10px] font-semibold text-cyan-300 hover:bg-cyan-500/20 active:scale-95 transition disabled:opacity-50"
+                          >
+                            <Sparkles className="h-3 w-3" />
+                            Apply &amp; Re-analyze
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleCopyOptimizedCode}
+                            className="inline-flex items-center gap-1 rounded border border-slate-700 bg-slate-800 px-2 py-0.5 text-[10px] text-slate-200 hover:border-cyan-400"
+                          >
+                            <Copy className="h-3 w-3" />
+                            {copySuccess ? 'Copied' : 'Copy'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleDownloadOptimizedCode}
+                            className="inline-flex items-center gap-1 rounded border border-slate-700 bg-slate-800 px-2 py-0.5 text-[10px] text-slate-200 hover:border-cyan-400"
+                          >
+                            <Download className="h-3 w-3" />
+                            Download
+                          </button>
                         </div>
-                      ) : (
-                        <div className="rounded-lg border border-slate-800 bg-slate-900/90 overflow-hidden">
-                          <div className="flex items-center justify-between border-b border-slate-800 px-2 py-1.5">
-                            <span className="text-[10px] font-semibold uppercase tracking-wider text-cyan-300">Optimized Code</span>
-                            <div className="flex items-center gap-1.5">
-                              <button
-                                type="button"
-                                onClick={handleApplyLevel3Solution}
-                                disabled={loading}
-                                className="inline-flex items-center gap-1 rounded border border-cyan-500/40 bg-cyan-500/10 px-2 py-0.5 text-[10px] font-semibold text-cyan-300 hover:bg-cyan-500/20 active:scale-95 transition disabled:opacity-50"
-                              >
-                                <Sparkles className="h-3 w-3" />
-                                Apply &amp; Re-analyze
-                              </button>
-                              <button
-                                type="button"
-                                onClick={handleCopyOptimizedCode}
-                                className="inline-flex items-center gap-1 rounded border border-slate-700 bg-slate-800 px-2 py-0.5 text-[10px] text-slate-200 hover:border-cyan-400"
-                              >
-                                <Copy className="h-3 w-3" />
-                                {copySuccess ? 'Copied' : 'Copy'}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={handleDownloadOptimizedCode}
-                                className="inline-flex items-center gap-1 rounded border border-slate-700 bg-slate-800 px-2 py-0.5 text-[10px] text-slate-200 hover:border-cyan-400"
-                              >
-                                <Download className="h-3 w-3" />
-                                Download
-                              </button>
-                            </div>
-                          </div>
-                          <div className="h-[180px]">
-                            <Editor
-                              theme="vs-dark"
-                              language={language === 'plaintext' ? 'plaintext' : language}
-                              value={optimizedCodeForLevel3}
-                              options={{
-                                readOnly: true,
-                                minimap: { enabled: false },
-                                scrollBeyondLastLine: false,
-                                fontSize: 12,
-                                lineNumbers: 'on',
-                                wordWrap: 'off',
-                                automaticLayout: true,
-                              }}
-                            />
-                          </div>
-                        </div>
-                      )}
+                      </div>
+                      <div className="h-[180px]">
+                        <Editor
+                          theme="vs-dark"
+                          language={language}
+                          value={optimizedCodeForLevel3}
+                          options={{
+                            readOnly: true,
+                            minimap: { enabled: false },
+                            scrollBeyondLastLine: false,
+                            fontSize: 12,
+                            lineNumbers: 'on',
+                            wordWrap: 'off',
+                            automaticLayout: true,
+                          }}
+                        />
+                      </div>
                     </div>
                   )}
                 </div>

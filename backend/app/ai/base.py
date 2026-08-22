@@ -19,7 +19,8 @@ class BaseAIProvider(ABC):
         self,
         code: str,
         language: str,
-                static_analysis: dict[str, Any],
+        static_analysis: dict[str, Any],
+        problem_info: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """
                 Review code snippet, incorporating static analysis findings, and return structured insights.

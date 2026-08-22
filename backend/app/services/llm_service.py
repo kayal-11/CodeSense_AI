@@ -165,14 +165,15 @@ class LLMService:
         code: str,
         language: str,
         static_analysis: dict[str, Any],
+        problem_info: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """
-        Performs code review using the active provider, incorporating static findings.
+        Performs code review using the active provider, incorporating static findings and optional problem info.
         """
         provider = await self.get_active_provider()
         if provider != self.fallback_provider:
             try:
-                return await provider.review_code(code, language, static_analysis)
+                return await provider.review_code(code, language, static_analysis, problem_info=problem_info)
             except Exception as exc:
                 logger.error(f"Error in AI code review with provider {provider.__class__.__name__}: {exc}. Using static analysis fallback.")
                 return self._build_static_fallback_review(language, static_analysis)

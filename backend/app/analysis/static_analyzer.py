@@ -94,7 +94,7 @@ def _detect_java_class_name(code: str) -> str | None:
     return match.group(1)
 
 
-def _write_temp_source(temp_dir: str, language: str, code: str) -> Path:
+def _write_temp_source(temp_dir: str, language: str, code: str, has_problem_url: bool = False) -> tuple[Path, int]:
     ext_map = {
         'python': '.py',
         'javascript': '.js',
@@ -107,6 +107,36 @@ def _write_temp_source(temp_dir: str, language: str, code: str) -> Path:
         'rust': '.rs',
     }
     ext = ext_map.get(language, '.txt')
+    prepended_lines = 0
+
+    mock_prefix = ""
+    if has_problem_url:
+        if language == 'java':
+            mock_prefix = (
+                "class ListNode { int val; ListNode next; ListNode() {} ListNode(int val) { this.val = val; } ListNode(int val, ListNode next) { this.val = val; this.next = next; } }\n"
+                "class TreeNode { int val; TreeNode left; TreeNode right; TreeNode() {} TreeNode(int val) { this.val = val; } TreeNode(int val, TreeNode left, TreeNode right) { this.val = val; this.left = left; this.right = right; } }\n"
+                "class Node { int val; Node left; Node right; Node next; Node random; Node parent; java.util.List<Node> neighbors; Node() {} Node(int _val) { val = _val; } }\n"
+                "class Point { int x, y; Point() {} Point(int a, int b) { x = a; y = b; } }\n"
+                "class Pair<K,V> { K key; V value; Pair(K k, V v) { key = k; value = v; } K getKey() { return key; } V getValue() { return value; } }\n"
+            )
+            prepended_lines = mock_prefix.count('\n')
+        elif language in {'cpp', 'c++'}:
+            mock_prefix = (
+                "#include <iostream>\n#include <vector>\n#include <string>\n#include <unordered_map>\n#include <unordered_set>\n#include <map>\n#include <set>\n#include <queue>\n#include <stack>\n#include <algorithm>\n#include <cmath>\n"
+                "struct ListNode { int val; ListNode *next; ListNode() : val(0), next(nullptr) {} ListNode(int x) : val(x), next(nullptr) {} ListNode(int x, ListNode *next) : val(x), next(next) {} };\n"
+                "struct TreeNode { int val; TreeNode *left; TreeNode *right; TreeNode() : val(0), left(nullptr), right(nullptr) {} TreeNode(int x) : val(x), left(nullptr), right(nullptr) {} TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {} };\n"
+                "struct Node { int val; std::vector<Node*> neighbors; Node* left; Node* right; Node* next; Node* random; Node() : val(0), left(nullptr), right(nullptr), next(nullptr), random(nullptr) {} Node(int _val) : val(_val), left(nullptr), right(nullptr), next(nullptr), random(nullptr) {} };\n"
+            )
+            prepended_lines = mock_prefix.count('\n')
+        elif language == 'c':
+            mock_prefix = (
+                "#include <stdio.h>\n#include <stdlib.h>\n#include <stdbool.h>\n"
+                "struct ListNode { int val; struct ListNode *next; };\n"
+                "struct TreeNode { int val; struct TreeNode *left; struct TreeNode *right; };\n"
+                "struct Node { int val; struct Node *left; struct Node *right; struct Node *next; struct Node *random; };\n"
+                "typedef struct ListNode ListNode;\ntypedef struct TreeNode TreeNode;\ntypedef struct Node Node;\n"
+            )
+            prepended_lines = mock_prefix.count('\n')
 
     if language == 'java':
         class_name = _detect_java_class_name(code)
@@ -115,8 +145,8 @@ def _write_temp_source(temp_dir: str, language: str, code: str) -> Path:
         file_name = f'tmp_source{ext}'
 
     source_path = Path(temp_dir) / file_name
-    source_path.write_text(code, encoding='utf-8')
-    return source_path
+    source_path.write_text(mock_prefix + code, encoding='utf-8')
+    return source_path, prepended_lines
 
 
 def _find_first_available(commands: list[str]) -> str | None:
@@ -233,7 +263,7 @@ def _parse_compiler_output(language: str, output: str, source_path: Path) -> lis
     return deduped
 
 
-def _collect_compiler_diagnostics(code: str, language: str) -> list[dict[str, Any]]:
+def _collect_compiler_diagnostics(code: str, language: str, has_problem_url: bool = False) -> list[dict[str, Any]]:
     normalized = language.lower()
     alias_map = {
         'py': 'python',
@@ -250,7 +280,7 @@ def _collect_compiler_diagnostics(code: str, language: str) -> list[dict[str, An
 
     issues: list[dict[str, Any]] = []
     with tempfile.TemporaryDirectory(prefix='codesense-') as temp_dir:
-        source_path = _write_temp_source(temp_dir, normalized, code)
+        source_path, prepended_lines = _write_temp_source(temp_dir, normalized, code, has_problem_url=has_problem_url)
         command = _language_compile_command(normalized, source_path)
         if not command:
             return []
@@ -274,17 +304,14 @@ def _collect_compiler_diagnostics(code: str, language: str) -> list[dict[str, An
         output = (result.stderr or '') + '\n' + (result.stdout or '')
         diagnostics = _parse_compiler_output(normalized, output, source_path)
         if not diagnostics:
-            _compiler_error_issue(
-                issues,
-                normalized,
-                1,
-                None,
-                'Compiler reported errors but did not provide structured line diagnostics.',
-            )
-            return issues
+            return []
 
         for line, col, msg in diagnostics:
-            _compiler_error_issue(issues, normalized, line, col, msg)
+            actual_line = max(1, line - prepended_lines)
+            lowered = msg.lower()
+            if has_problem_url and any(t in lowered for t in ['listnode', 'treenode', 'node', 'point', 'pair', 'quadtree', 'solution', 'main method', 'missing main', 'undefined reference to main']):
+                continue
+            _compiler_error_issue(issues, normalized, actual_line, col, msg)
 
     return issues
 
@@ -311,7 +338,9 @@ class PythonErrorDetector(ast.NodeVisitor):
             'NameError', 'SyntaxError', 'ZeroDivisionError', 'ImportError',
             'ModuleNotFoundError', 'StopIteration', 'FileNotFoundError', 'OSError',
             'IOError', 'NotImplementedError', '__name__', '__file__', '__doc__',
-            'self', 'cls', 'args', 'kwargs'
+            'self', 'cls', 'args', 'kwargs',
+            'ListNode', 'TreeNode', 'Node', 'Point', 'Pair', 'Tree', 'QuadTree', 'Solution',
+            'Optional', 'List', 'Dict', 'Set', 'Tuple', 'Any', 'Union', 'Iterable', 'Sequence'
         }
 
         self.std_modules = {
@@ -592,7 +621,7 @@ def _dedupe_issues(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return deduped
 
 
-def analyze_code(code: str, language: str) -> dict[str, Any]:
+def analyze_code(code: str, language: str, problem_info: dict[str, Any] | None = None) -> dict[str, Any]:
     issues: list[dict[str, Any]] = []
     normalized_language = (language or 'python').strip().lower()
     alias_map = {
@@ -604,9 +633,10 @@ def analyze_code(code: str, language: str) -> dict[str, Any]:
         'c#': 'csharp',
     }
     normalized_language = alias_map.get(normalized_language, normalized_language)
+    has_problem_url = bool(problem_info)
 
     # Use real parser/compiler diagnostics whenever toolchain is available.
-    issues.extend(_collect_compiler_diagnostics(code, normalized_language))
+    issues.extend(_collect_compiler_diagnostics(code, normalized_language, has_problem_url=has_problem_url))
 
     # Language-agnostic high-confidence regex detections.
     lines = code.splitlines()

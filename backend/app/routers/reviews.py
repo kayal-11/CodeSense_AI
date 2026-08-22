@@ -20,6 +20,7 @@ from app.analysis.review_workflow import (
     split_issue_buckets,
 )
 from app.services.llm_service import LLMService
+from app.services.problem_service import ProblemService
 from database.session import get_db
 
 router = APIRouter()
@@ -32,6 +33,7 @@ class ReviewRequest(BaseModel):
     analysis_profile: str = 'standard-v1'
     filename: str | None = None
     review_id: int | None = None
+    problem_url: str | None = None
 
 
 class ReviewResponse(BaseModel):
@@ -235,8 +237,9 @@ async def review_code(
 ) -> ReviewResponse:
     normalized_language = normalize_language(payload.language)
     source_hash = code_hash(payload.code)
-    settings_hash = settings_fingerprint(normalized_language, f"{payload.analysis_profile}:{service.provider_type}")
-    cache_key = source_hash
+    prob_url_clean = (payload.problem_url or '').strip()
+    settings_hash = settings_fingerprint(normalized_language, f"{payload.analysis_profile}:{service.provider_type}:{prob_url_clean}")
+    cache_key = f"{source_hash}:{prob_url_clean}"
 
     cached_entry = ANALYSIS_CACHE.get(cache_key)
     if cached_entry and cached_entry[0] == settings_hash and not payload.review_id:
@@ -244,12 +247,18 @@ async def review_code(
         cached_response.cached = True
         return cached_response
 
-    try:
-        # Run static rule analyzer
-        static_analysis = analyze_code(payload.code, normalized_language)
+    problem_info = None
+    if prob_url_clean:
+        problem_info, err_msg = await ProblemService.fetch_problem_details(prob_url_clean)
+        if err_msg or not problem_info:
+            raise HTTPException(status_code=400, detail=err_msg or "Invalid or unidentified Problem URL.")
 
-        # Run AI audit (Ollama / Fallback) after static analysis, passing full analyzer context.
-        ai_analysis = await service.review(payload.code, normalized_language, static_analysis)
+    try:
+        # Run static rule analyzer with problem context awareness
+        static_analysis = analyze_code(payload.code, normalized_language, problem_info=problem_info)
+
+        # Run AI audit after static analysis, passing full analyzer context and optional problem info.
+        ai_analysis = await service.review(payload.code, normalized_language, static_analysis, problem_info=problem_info)
         if not isinstance(ai_analysis, dict):
             return _fallback_review_response('AI provider returned an unexpected response format.', source_hash=source_hash, source_code=payload.code)
 

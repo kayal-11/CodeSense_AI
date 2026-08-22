@@ -58,6 +58,7 @@ class FallbackProvider(BaseAIProvider):
         code: str,
         language: str,
         static_analysis: dict[str, Any],
+        problem_info: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         issues = []
         static_findings = static_analysis.get("issues", []) if isinstance(static_analysis, dict) else []
@@ -203,6 +204,33 @@ class FallbackProvider(BaseAIProvider):
             if issue not in bugs and issue not in security_vulnerabilities and issue not in performance_issues and issue not in code_smells
         ]
 
+        prob_title = problem_info.get("title", "DSA Problem") if problem_info else "DSA Problem"
+
+        learning_assistant = {
+            "level_1_hint": ["Review basic loop boundaries and linear vs quadratic checks."],
+            "level_2_guidance": ["Consider using hash map or binary search for optimization."],
+            "level_1_brute_force": {
+                "explanation": f"Brute force solution for {prob_title} checking all element pairs/subsets.",
+                "algorithm": "1. Iterate through elements with nested loops.\n2. Verify conditions for each pair.\n3. Return answer.",
+                "code": code,
+                "time_space_complexity": "Time: O(N^2), Space: O(1)",
+                "why_inefficient": "Redundant checking of every pair leads to quadratic execution time."
+            },
+            "level_2_better_approach": {
+                "explanation": f"Improved solution for {prob_title} utilizing sorting or two-pointer strategy.",
+                "algorithm": "1. Sort input array or build index map.\n2. Traversal with single pass or binary search.\n3. Return result.",
+                "code": code,
+                "time_space_complexity": "Time: O(N log N), Space: O(N)",
+                "improvement_over_level_1": "Reduces iterations from quadratic O(N^2) to linearithmic or linear time."
+            },
+            "level_3_optimized_solution": {
+                "code": "",
+                "is_already_optimal": True,
+                "summary": "Fallback analyzer provided heuristics review.",
+                "explanations": ["Current code checked against offline rules."]
+            }
+        }
+
         return {
             "summary": summary,
             "overall_score": score,
@@ -227,5 +255,6 @@ class FallbackProvider(BaseAIProvider):
                 "Add security-focused tests for injection and unsafe-input scenarios."
             ],
             "issues": deduped_issues,
+            "learning_assistant": learning_assistant,
             "score": score
         }

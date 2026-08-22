@@ -78,12 +78,33 @@ def normalize_issue(issue: dict[str, Any], fallback_type: str = 'Issue') -> dict
 
 
 
+def is_platform_environment_issue(issue: dict[str, Any]) -> bool:
+    msg = str(issue.get('message', '')).lower()
+    issue_type = str(issue.get('type', '')).lower()
+    why = str(issue.get('why_it_matters', '')).lower()
+    text = f"{issue_type} {msg} {why}"
+
+    platform_types = ['listnode', 'treenode', 'node', 'point', 'pair', 'quadtree', 'solution']
+    action_words = ['cannot find', 'not found', 'missing', 'undefined', 'not declared', 'unknown type', 'import', 'symbol']
+
+    if any(ptype in text for ptype in platform_types):
+        if any(action in text for action in action_words):
+            return True
+
+    if any(token in text for token in ['main method', 'missing main', 'undefined reference to main', 'entry point', 'main method not found']):
+        return True
+
+    return False
+
+
 def dedupe_and_sort_issues(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
     seen: set[tuple[str, str, int, str]] = set()
     normalized: list[dict[str, Any]] = []
 
     for issue in issues:
         item = normalize_issue(issue)
+        if is_platform_environment_issue(item):
+            continue
         key = (
             item['type'].lower(),
             item['severity'],

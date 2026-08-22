@@ -168,6 +168,7 @@ class GroqProvider(BaseAIProvider):
         code: str,
         language: str,
         static_analysis: dict[str, Any],
+        problem_info: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """
         Perform AI code review using Groq API (`openai/gpt-oss-120b`), generating a compact jury-friendly report.
@@ -182,9 +183,26 @@ class GroqProvider(BaseAIProvider):
         }
         url = f"{self.base_url}/chat/completions"
 
+        has_problem_url = bool(problem_info)
+        mode_instruction = (
+            "URL PROVIDED MODE:\n"
+            "The user provided a Problem URL from an online judge coding platform (LeetCode/GeeksforGeeks/etc.).\n"
+            "1. Use the coding platform's environment and problem context.\n"
+            "2. Do NOT require main()/driver code if the platform submission format does not require it.\n"
+            "3. Do NOT report platform-provided types like ListNode, TreeNode, Node, Point, Pair, Tree, QuadTree, Solution as missing or compilation errors.\n"
+            "4. Analyze the user's solution based on solving the actual problem.\n"
+            "5. Platform-environment notices must NEVER appear in the 'issues' array.\n"
+            if has_problem_url
+            else "NO URL PROVIDED MODE:\n"
+            "Treat the code as standalone source code.\n"
+            "1. Check normal declarations, imports, main(), classes, functions, etc.\n"
+            "2. Report missing declarations such as ListNode/TreeNode or missing main() as actual errors.\n"
+        )
+
         system_prompt = (
             "You are CodeSense AI, an expert code reviewer and competition judge. "
-            "Analyze the provided source code. "
+            "Analyze the provided source code and optional problem context.\n\n"
+            f"{mode_instruction}\n"
             "Respond ONLY in valid JSON adhering strictly to this schema:\n"
             "{\n"
             '  "score_out_of_ten": "9.2/10", // String like "9.2/10" or "8/10"\n'
@@ -198,41 +216,61 @@ class GroqProvider(BaseAIProvider):
             '    "Improve exception handling"\n'
             '  ],\n'
             '  "verdict": "Production-ready with minor improvements.", // 1 concise sentence\n'
-            "  \"is_already_optimal\": false, // boolean: true if current code is optimal\n"
-            "  \"issues\": [\n"
-            "    {\n"
+            '  "is_already_optimal": false, // boolean: true if current code is optimal\n'
+            '  "issues": [\n'
+            '    {\n'
             '      "type": "Syntax Error",\n'
             '      "severity": "critical",\n'
             '      "message": "Missing colon at end of statement",\n'
-            '      "line": 7, // Integer: EXACT ROOT-CAUSE line where developer fix is required\n'
+            '      "line": 7,\n'
             '      "why_it_matters": "Missing colon breaks statement syntax.",\n'
             '      "suggested_fix": "Add colon to statement.",\n'
             '      "is_error": true,\n'
-            '      "level": "Level 1"\n'
-            "    }\n"
-            "  ],\n"
-            '  "optimized_code": "Return ONLY complete compilable source code with proper indentation and line breaks. Never minify or compress the code into one line. Every class, method, brace, and statement must be formatted exactly as in a professional IDE. Do not include markdown fences.", // empty if is_already_optimal\n'
+            '      "level": "Error"\n'
+            '    }\n'
+            '  ],\n'
+            '  "optimized_code": "Return ONLY complete compilable source code in target language.",\n'
+            '  "level_1_brute_force": {\n'
+            '    "explanation": "High-level overview of naive brute force approach.",\n'
+            '    "algorithm": "1. Iterate through elements.\\n2. Compare pairs.\\n3. Return result.",\n'
+            '    "code": "Complete compilable brute force solution in target language.",\n'
+            '    "time_space_complexity": "Time: O(N^2), Space: O(1)",\n'
+            '    "why_inefficient": "Nested loops iterate through all possible pairs resulting in quadratic execution time."\n'
+            '  },\n'
+            '  "level_2_better_approach": {\n'
+            '    "explanation": "Overview of optimized approach using sorting, binary search, or two pointers.",\n'
+            '    "algorithm": "1. Sort input array.\\n2. Use two pointers.\\n3. Return result.",\n'
+            '    "code": "Complete compilable better approach solution in target language.",\n'
+            '    "time_space_complexity": "Time: O(N log N), Space: O(1)",\n'
+            '    "improvement_over_level_1": "Reduces time complexity from quadratic O(N^2) to linearithmic O(N log N) by sorting first."\n'
+            '  },\n'
             '  "level_1_hint": "Check hash map lookup efficiency for linear time complexity.",\n'
             '  "level_2_approach": "Scan the collection once while storing complements in hash table.",\n'
             '  "level_3_solution_summary": "Linear time complexity solution using hash map for O(1) lookups."\n'
             "}\n"
             "CRITICAL RULES:\n"
-            "0. ROOT-CAUSE ERROR ANALYSIS: Use static analyzer diagnostics as initial evidence. Evaluate full source code context to identify the EXACT ROOT-CAUSE LINE where the developer needs to make the fix. Never report a cascading line (e.g. line 19) when the root error occurred earlier (e.g. line 7).\n"
-            "1. Keep all text ultra-concise (1 line per section).\n"
-            "2. top_fixes MUST contain 2 to 3 short bullet points highlighting detected errors or key fixes.\n"
+            "0. ROOT-CAUSE ERROR ANALYSIS: Evaluate full source code context to identify exact root-cause line.\n"
+            "1. Both level_1_brute_force and level_2_better_approach MUST contain valid runnable code snippets formatted strictly in the specified programming language.\n"
+            "2. If problem context is provided, tailor all explanations, algorithms, and code to the exact problem requirements.\n"
             "3. If code is already optimal, set is_already_optimal=true and optimized_code=\"\".\n"
-            "4. Return ONLY raw valid JSON.\n"
-            "5. optimized_code MUST be properly formatted source code.\n"
-            "6. Never minify or compress the code.\n"
-            "7. Preserve standard indentation (4 spaces).\n"
-            "8. Put every class, method, statement, and brace on separate lines.\n"
-            "9. Do not escape newlines (\\n) or tabs (\\t).\n"
-            "10. Do not wrap optimized_code in triple backticks."
+            "4. Return ONLY raw valid JSON."
         )
 
+        problem_ctx_str = ""
+        if problem_info:
+            problem_ctx_str = (
+                f"PROBLEM CONTEXT:\n"
+                f"Platform: {problem_info.get('platform')}\n"
+                f"Title: {problem_info.get('title')}\n"
+                f"Difficulty: {problem_info.get('difficulty')}\n"
+                f"Topics: {problem_info.get('topic')}\n"
+                f"Description: {problem_info.get('description')}\n\n"
+            )
+
         prompt = (
+            f"{problem_ctx_str}"
             f"Language: {language}\n\n"
-            f"Source Code:\n```\n{code}\n```\n\n"
+            f"User's Submitted Source Code:\n```\n{code}\n```\n\n"
             f"Static Analysis Report: {json.dumps(static_analysis)}\n\n"
             "Perform code audit and output standard JSON response."
         )
@@ -319,10 +357,7 @@ class GroqProvider(BaseAIProvider):
                     )
 
                     # Normalize line endings
-                    clean_opt_code = clean_opt_code.replace("\r\n", "\n").replace("\r", "\n")
-
-                    clean_opt_code = clean_opt_code.strip()
-
+                    clean_opt_code = clean_opt_code.replace("\r\n", "\n").replace("\r", "\n").strip()
 
                     if is_already_optimal or clean_opt_code == code.strip():
                         clean_opt_code = ""
@@ -341,9 +376,43 @@ class GroqProvider(BaseAIProvider):
                     lvl2 = str(result.get("level_2_approach", "Single pass array traversal storing complements.")).strip()
                     lvl3_sum = str(result.get("level_3_solution_summary", "Refactored linear time implementation.")).strip()
 
+                    raw_lvl1_bf = result.get("level_1_brute_force")
+                    if not isinstance(raw_lvl1_bf, dict):
+                        raw_lvl1_bf = {
+                            "explanation": "Simple brute force check iterating through all possibilities.",
+                            "algorithm": "Iterate through elements step-by-step and check conditions.",
+                            "code": code,
+                            "time_space_complexity": "Time: O(N^2), Space: O(1)",
+                            "why_inefficient": "Iterates repeatedly through nested loops causing higher execution time."
+                        }
+
+                    raw_lvl2_ba = result.get("level_2_better_approach")
+                    if not isinstance(raw_lvl2_ba, dict):
+                        raw_lvl2_ba = {
+                            "explanation": "Optimized strategy using sorting or binary search to reduce iterations.",
+                            "algorithm": "Sort or organize input data first, then scan once.",
+                            "code": clean_opt_code or code,
+                            "time_space_complexity": "Time: O(N log N), Space: O(1)",
+                            "improvement_over_level_1": "Reduces redundant iterations compared to brute force."
+                        }
+
                     learning_assistant = {
                         "level_1_hint": [lvl1],
                         "level_2_guidance": [lvl2],
+                        "level_1_brute_force": {
+                            "explanation": str(raw_lvl1_bf.get("explanation", "Naive brute force approach.")),
+                            "algorithm": raw_lvl1_bf.get("algorithm", "Iterate over elements."),
+                            "code": str(raw_lvl1_bf.get("code", code)).strip(),
+                            "time_space_complexity": str(raw_lvl1_bf.get("time_space_complexity", "Time: O(N^2), Space: O(1)")),
+                            "why_inefficient": str(raw_lvl1_bf.get("why_inefficient", "Nested iteration causes quadratic overhead.")),
+                        },
+                        "level_2_better_approach": {
+                            "explanation": str(raw_lvl2_ba.get("explanation", "Better approach reducing iterations.")),
+                            "algorithm": raw_lvl2_ba.get("algorithm", "Use auxiliary structure or pointer techniques."),
+                            "code": str(raw_lvl2_ba.get("code", clean_opt_code or code)).strip(),
+                            "time_space_complexity": str(raw_lvl2_ba.get("time_space_complexity", "Time: O(N log N), Space: O(N)")),
+                            "improvement_over_level_1": str(raw_lvl2_ba.get("improvement_over_level_1", "Improves overall runtime efficiency.")),
+                        },
                         "level_3_optimized_solution": {
                             "code": clean_opt_code,
                             "is_already_optimal": is_already_optimal or not clean_opt_code,
