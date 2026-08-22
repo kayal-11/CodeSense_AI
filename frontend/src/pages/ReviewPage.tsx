@@ -1432,7 +1432,8 @@ const ReviewPage = () => {
           <div className="flex-1 min-h-[300px] overflow-hidden rounded-xl border border-slate-800">
             <Editor
               theme="vs-dark"
-              language={language === 'plaintext' ? 'plaintext' : language}
+              language={language}
+              //language={language === 'plaintext' ? 'plaintext' : language}
               value={code}
               onChange={(value) => handleCodeChange(value ?? '')}
               onMount={handleEditorMount}
