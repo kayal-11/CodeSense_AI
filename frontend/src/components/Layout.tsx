@@ -8,11 +8,6 @@ const configuredApiBase = (import.meta.env.VITE_API_BASE_URL as string | undefin
 const API_BASE = configuredApiBase && configuredApiBase.length > 0 ? configuredApiBase.replace(/\/$/, '') : '/api';
 const apiUrl = (path: string): string => `${API_BASE}${path.startsWith('/') ? path : `/${path}`}`;
 
-const authHeaders = (): Record<string, string> => {
-  const token = localStorage.getItem('token');
-  return token ? { Authorization: `Bearer ${token}` } : {};
-};
-
 const navItems = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/review', label: 'Review Code', icon: Activity },
@@ -28,7 +23,7 @@ interface StreakData {
 }
 
 const Layout = () => {
-  const { user, logout } = useAuth();
+  const { user, token, logout } = useAuth();
   const location = useLocation();
   const [streak, setStreak] = useState<StreakData>({
     current_streak: 0,
@@ -37,9 +32,12 @@ const Layout = () => {
   });
 
   const fetchStreak = async () => {
+    const jwtToken = token || localStorage.getItem('token');
+    if (!jwtToken) return;
+
     try {
       const res = await axios.get<StreakData>(apiUrl('/reports/dashboard'), {
-        headers: authHeaders(),
+        headers: { Authorization: `Bearer ${jwtToken}` },
       });
       if (res.data) {
         setStreak({
@@ -55,7 +53,7 @@ const Layout = () => {
 
   useEffect(() => {
     fetchStreak();
-  }, [location.pathname]);
+  }, [location.pathname, token]);
 
   const getInitials = (name: string) => {
     return name

@@ -4,15 +4,11 @@ import { AlertTriangle, CheckCircle2, Flame, Target, TrendingUp } from 'lucide-r
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
+import { useAuth } from '../context/AuthContext';
 
 const configuredApiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim();
 const API_BASE = configuredApiBase && configuredApiBase.length > 0 ? configuredApiBase.replace(/\/$/, '') : '/api';
 const apiUrl = (path: string): string => `${API_BASE}${path.startsWith('/') ? path : `/${path}`}`;
-
-const authHeaders = (): Record<string, string> => {
-  const token = localStorage.getItem('token');
-  return token ? { Authorization: `Bearer ${token}` } : {};
-};
 
 interface DashboardData {
   problems_solved: number;
@@ -71,13 +67,17 @@ const defaultDashboard: DashboardData = {
 
 const DashboardPage = () => {
   const navigate = useNavigate();
+  const { token } = useAuth();
   const [data, setData] = useState<DashboardData>(defaultDashboard);
 
   useEffect(() => {
     const fetchDashboardStats = async () => {
+      const jwtToken = token || localStorage.getItem('token');
+      if (!jwtToken) return;
+
       try {
         const res = await axios.get<DashboardData>(apiUrl('/reports/dashboard'), {
-          headers: authHeaders(),
+          headers: { Authorization: `Bearer ${jwtToken}` },
         });
         if (res.data) {
           setData(res.data);
@@ -88,7 +88,7 @@ const DashboardPage = () => {
     };
 
     fetchDashboardStats();
-  }, []);
+  }, [token]);
 
   const totalLevelSolved = (data.level_progression.level_1 + data.level_progression.level_2 + data.level_progression.level_3) || 1;
   const lvl1Pct = Math.round((data.level_progression.level_1 / totalLevelSolved) * 100);

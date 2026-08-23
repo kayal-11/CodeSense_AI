@@ -3,15 +3,11 @@ import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import axios from 'axios';
 import { FileCode, AlertCircle, Clock, Trash2 } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
 
 const configuredApiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim();
 const API_BASE = configuredApiBase && configuredApiBase.length > 0 ? configuredApiBase.replace(/\/$/, '') : '/api';
 const apiUrl = (path: string): string => `${API_BASE}${path.startsWith('/') ? path : `/${path}`}`;
-
-const authHeaders = (): Record<string, string> => {
-  const token = localStorage.getItem('token');
-  return token ? { Authorization: `Bearer ${token}` } : {};
-};
 
 interface ReviewHistoryItem {
   id: number;
@@ -58,16 +54,28 @@ const formatTimestamp = (isoString: string | null): string => {
 
 const HistoryPage = () => {
   const navigate = useNavigate();
+  const { token } = useAuth();
   const [reviews, setReviews] = useState<ReviewHistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const getHeaders = () => {
+    const jwtToken = token || localStorage.getItem('token');
+    return jwtToken ? { Authorization: `Bearer ${jwtToken}` } : {};
+  };
+
   const fetchHistory = async () => {
+    const jwtToken = token || localStorage.getItem('token');
+    if (!jwtToken) {
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     setError(null);
     try {
       const response = await axios.get<ReviewHistoryItem[]>(apiUrl('/review/history'), {
-        headers: authHeaders(),
+        headers: getHeaders(),
       });
       setReviews(response.data);
     } catch (err: any) {
@@ -80,7 +88,7 @@ const HistoryPage = () => {
 
   useEffect(() => {
     fetchHistory();
-  }, []);
+  }, [token]);
 
   const handleSelectReview = (review: ReviewHistoryItem) => {
     navigate('/review', { state: { review } });
@@ -92,7 +100,7 @@ const HistoryPage = () => {
       return;
     }
     try {
-      await axios.delete(apiUrl(`/review/${reviewId}`), { headers: authHeaders() });
+      await axios.delete(apiUrl(`/review/${reviewId}`), { headers: getHeaders() });
       setReviews((prev) => prev.filter((r) => r.id !== reviewId));
     } catch (err: any) {
       console.error('Failed to delete review:', err);
@@ -106,7 +114,7 @@ const HistoryPage = () => {
       return;
     }
     try {
-      await axios.delete(apiUrl('/review/history/all'), { headers: authHeaders() });
+      await axios.delete(apiUrl('/review/history/all'), { headers: getHeaders() });
       setReviews([]);
     } catch (err: any) {
       console.error('Failed to delete all review history:', err);
