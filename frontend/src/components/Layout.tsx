@@ -1,18 +1,61 @@
-import { NavLink, Outlet } from 'react-router-dom';
-import { Activity, Bot, FileUp, History, LayoutDashboard, MessageSquare, Settings, LogOut } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import { Activity, Bot, Flame, History, LayoutDashboard, MessageSquare, Settings, LogOut } from 'lucide-react';
+import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
+
+const configuredApiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim();
+const API_BASE = configuredApiBase && configuredApiBase.length > 0 ? configuredApiBase.replace(/\/$/, '') : '/api';
+const apiUrl = (path: string): string => `${API_BASE}${path.startsWith('/') ? path : `/${path}`}`;
+
+const authHeaders = (): Record<string, string> => {
+  const token = localStorage.getItem('token');
+  return token ? { Authorization: `Bearer ${token}` } : {};
+};
 
 const navItems = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/review', label: 'Review Code', icon: Activity },
-  { to: '/upload', label: 'Upload Files', icon: FileUp },
   { to: '/history', label: 'Review History', icon: History },
   { to: '/chat', label: 'AI Chat', icon: MessageSquare },
   { to: '/settings', label: 'Settings', icon: Settings },
 ];
 
+interface StreakData {
+  current_streak: number;
+  best_streak: number;
+  today_completed: boolean;
+}
+
 const Layout = () => {
   const { user, logout } = useAuth();
+  const location = useLocation();
+  const [streak, setStreak] = useState<StreakData>({
+    current_streak: 0,
+    best_streak: 0,
+    today_completed: false,
+  });
+
+  const fetchStreak = async () => {
+    try {
+      const res = await axios.get<StreakData>(apiUrl('/reports/dashboard'), {
+        headers: authHeaders(),
+      });
+      if (res.data) {
+        setStreak({
+          current_streak: res.data.current_streak || 0,
+          best_streak: res.data.best_streak || 0,
+          today_completed: Boolean(res.data.today_completed),
+        });
+      }
+    } catch (err) {
+      console.error('Failed to fetch streak data:', err);
+    }
+  };
+
+  useEffect(() => {
+    fetchStreak();
+  }, [location.pathname]);
 
   const getInitials = (name: string) => {
     return name
@@ -54,9 +97,29 @@ const Layout = () => {
         </nav>
 
         <div className="mt-auto space-y-4">
-          <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
-            <p className="text-sm font-medium">Free AI review</p>
-            <p className="mt-1 text-sm text-slate-400">Semgrep, Bandit, and local LLM analysis combined to deliver actionable review insights.</p>
+          <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4 space-y-2.5">
+            <div className="flex items-center gap-2 text-sm font-semibold text-white">
+              <Flame className="text-orange-400" size={18} />
+              <span>Streak Tracker</span>
+            </div>
+            <div className="space-y-1.5 text-xs">
+              <div className="flex justify-between">
+                <span className="text-slate-400">Current Streak:</span>
+                <span className="font-semibold text-orange-400">{streak.current_streak} Days</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Best Streak:</span>
+                <span className="font-semibold text-slate-200">{streak.best_streak} Days</span>
+              </div>
+              <div className="flex justify-between items-center pt-1.5 border-t border-slate-800/80">
+                <span className="text-slate-400">Today:</span>
+                {streak.today_completed ? (
+                  <span className="font-semibold text-emerald-400">✅ Completed</span>
+                ) : (
+                  <span className="font-semibold text-amber-400">⏳ Pending</span>
+                )}
+              </div>
+            </div>
           </div>
 
           <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4 flex items-center gap-3">

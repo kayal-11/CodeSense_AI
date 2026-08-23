@@ -17,8 +17,6 @@ class Settings(BaseSettings):
     groq_api_key: str = ''
     groq_model: str = 'openai/gpt-oss-120b'
     groq_base_url: str = 'https://api.groq.com/openai/v1'
-    ollama_base_url: str = 'http://localhost:11434'
-    ollama_model: str = 'qwen2.5-coder:1.5b'
     db_pool_size: int = 5
     db_max_overflow: int = 10
     db_pool_timeout: int = 30

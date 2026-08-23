@@ -7,7 +7,7 @@ from config.settings import settings
 class FallbackProvider(BaseAIProvider):
     """
     Fallback AI Provider.
-    Used when primary AI provider (Groq / Ollama) is offline, invalid, or unavailable.
+    Used when primary AI provider (Groq) is offline, invalid, or unavailable.
     Provides helpful static code patterns and message routing.
     """
 

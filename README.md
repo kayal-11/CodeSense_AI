@@ -1,6 +1,6 @@
 # CodeSense AI
 
-CodeSense AI is an AI-powered code review assistant built with FastAPI, React, PostgreSQL, and SQLAlchemy. It combines local free AI models with static analysis tools to provide actionable bug, security, performance, complexity, and standard-violation insights.
+CodeSense AI is an AI-powered code review assistant built with FastAPI, React, PostgreSQL, and SQLAlchemy. It combines Groq Cloud AI models with static analysis tools to provide actionable bug, security, performance, complexity, and standard-violation insights.
 
 ## Features
 - AI code review and security scanning
@@ -101,4 +101,4 @@ docker compose up --build
 - Frontend: Vite + React + TypeScript + Tailwind CSS + Monaco Editor
 - Backend: FastAPI + SQLAlchemy + JWT auth
 - Database: PostgreSQL with SQLAlchemy connection pooling and Alembic migrations
-- AI integration: Free local models via Ollama (configurable)
+- AI integration: Groq Cloud AI API with fallback heuristic engine

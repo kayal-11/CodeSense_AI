@@ -10,7 +10,6 @@ if hasattr(sys.stdout, 'reconfigure'):
 
 from config.settings import settings
 from app.ai.groq import GroqProvider
-from app.ai.ollama import OllamaProvider
 from app.services.llm_service import LLMService
 
 logging.basicConfig(level=logging.INFO)
@@ -78,15 +77,6 @@ def authenticate(user_input_pass):
         await invalid_groq.generate_response("Test prompt with invalid key")
     except RuntimeError as exc:
         print(f"Caught expected exception for invalid key: {exc}")
-
-    # 6. Test provider switching (Ollama provider selection)
-    print("\n6. Testing Provider Switching (LLM_PROVIDER=ollama simulation)...")
-    settings.llm_provider = 'ollama'
-    ollama_service = LLMService()
-    ollama_configured = ollama_service.get_configured_provider()
-    print(f"Configured Provider for LLM_PROVIDER=ollama: {ollama_configured.__class__.__name__}")
-    assert isinstance(ollama_configured, OllamaProvider), "Expected OllamaProvider when LLM_PROVIDER=ollama"
-    settings.llm_provider = 'groq' # Restore to groq
 
     print("\n=== All Verification Steps Completed Successfully ===")
 

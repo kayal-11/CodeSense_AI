@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import axios from 'axios';
-import { FileCode, AlertCircle, Clock } from 'lucide-react';
+import { FileCode, AlertCircle, Clock, Trash2 } from 'lucide-react';
 
 const configuredApiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim();
 const API_BASE = configuredApiBase && configuredApiBase.length > 0 ? configuredApiBase.replace(/\/$/, '') : '/api';
@@ -62,23 +62,23 @@ const HistoryPage = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const fetchHistory = async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        const response = await axios.get<ReviewHistoryItem[]>(apiUrl('/review/history'), {
-          headers: authHeaders(),
-        });
-        setReviews(response.data);
-      } catch (err: any) {
-        console.error('Failed to load review history:', err);
-        setError('Unable to load review history. Please check connection and retry.');
-      } finally {
-        setLoading(false);
-      }
-    };
+  const fetchHistory = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await axios.get<ReviewHistoryItem[]>(apiUrl('/review/history'), {
+        headers: authHeaders(),
+      });
+      setReviews(response.data);
+    } catch (err: any) {
+      console.error('Failed to load review history:', err);
+      setError('Unable to load review history. Please check connection and retry.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
+  useEffect(() => {
     fetchHistory();
   }, []);
 
@@ -86,11 +86,50 @@ const HistoryPage = () => {
     navigate('/review', { state: { review } });
   };
 
+  const handleDeleteReview = async (e: React.MouseEvent, reviewId: number, filename: string) => {
+    e.stopPropagation();
+    if (!window.confirm(`Are you sure you want to delete review "${filename}"? This action cannot be undone.`)) {
+      return;
+    }
+    try {
+      await axios.delete(apiUrl(`/review/${reviewId}`), { headers: authHeaders() });
+      setReviews((prev) => prev.filter((r) => r.id !== reviewId));
+    } catch (err: any) {
+      console.error('Failed to delete review:', err);
+      alert('Failed to delete review artifact. Please try again.');
+    }
+  };
+
+  const handleDeleteAll = async () => {
+    if (reviews.length === 0) return;
+    if (!window.confirm(`Are you sure you want to delete ALL ${reviews.length} review artifacts? This will reset all historical progress data.`)) {
+      return;
+    }
+    try {
+      await axios.delete(apiUrl('/review/history/all'), { headers: authHeaders() });
+      setReviews([]);
+    } catch (err: any) {
+      console.error('Failed to delete all review history:', err);
+      alert('Failed to delete all review history. Please try again.');
+    }
+  };
+
   return (
     <div className="space-y-6">
-      <div>
-        <p className="text-sm uppercase tracking-[0.3em] text-cyan-400">Review History</p>
-        <h1 className="text-3xl font-semibold text-white">Recent review artifacts</h1>
+      <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
+        <div>
+          <p className="text-sm uppercase tracking-[0.3em] text-cyan-400">Review History</p>
+          <h1 className="text-3xl font-semibold text-white">Recent review artifacts</h1>
+        </div>
+        {reviews.length > 0 && (
+          <button
+            onClick={handleDeleteAll}
+            className="flex items-center gap-2 rounded-full border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-xs font-semibold text-rose-300 transition hover:bg-rose-500/20 hover:border-rose-500/60"
+          >
+            <Trash2 size={14} />
+            Delete All History
+          </button>
+        )}
       </div>
 
       {loading ? (
@@ -125,7 +164,7 @@ const HistoryPage = () => {
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               onClick={() => handleSelectReview(review)}
-              className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-2xl border border-slate-800 bg-slate-900/80 px-5 py-4 shadow-glow hover:border-cyan-500/50 hover:bg-slate-900/90 cursor-pointer transition"
+              className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-2xl border border-slate-800 bg-slate-900/80 px-5 py-4 shadow-glow hover:border-cyan-500/50 hover:bg-slate-900/90 cursor-pointer transition group"
               title="Click to load code and AI review into editor"
             >
               <div className="space-y-1">
@@ -146,9 +185,18 @@ const HistoryPage = () => {
                   </span>
                 </div>
               </div>
-              <div className="text-right sm:self-center shrink-0">
-                <p className="text-xl font-bold text-cyan-300">{review.score}/100</p>
-                <p className="text-xs text-slate-400">Quality Score</p>
+              <div className="flex items-center gap-4 sm:self-center shrink-0 justify-between sm:justify-end">
+                <div className="text-right">
+                  <p className="text-xl font-bold text-cyan-300">{review.score}/100</p>
+                  <p className="text-xs text-slate-400">Quality Score</p>
+                </div>
+                <button
+                  onClick={(e) => handleDeleteReview(e, review.id, review.filename || 'Untitled File')}
+                  className="rounded-lg p-2 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition"
+                  title="Delete review artifact"
+                >
+                  <Trash2 size={16} />
+                </button>
               </div>
             </motion.div>
           ))}

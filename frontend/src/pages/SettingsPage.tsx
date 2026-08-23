@@ -11,7 +11,7 @@ const SettingsPage = () => {
       <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-4 rounded-3xl border border-slate-800 bg-slate-900/80 p-6 shadow-glow">
         <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
           <p className="font-semibold text-white">AI model selection</p>
-          <p className="mt-2 text-sm text-slate-400">Use Ollama with free local models such as DeepSeek Coder, CodeLlama, Qwen2.5-Coder, or StarCoder2.</p>
+          <p className="mt-2 text-sm text-slate-400">Powered by Groq cloud inference engine for fast, high-performance AI analysis and code review.</p>
         </div>
         <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
           <p className="font-semibold text-white">Static analysis gates</p>

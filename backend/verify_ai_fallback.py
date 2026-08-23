@@ -12,7 +12,7 @@ def test_chat():
             body = json.loads(response.read().decode())
             print(f"Status: {status}")
             print(f"Response: {json.dumps(body, indent=2)}")
-            if "Offline Mode" in body.get("reply", "") or "Ollama" in body.get("reply", ""):
+            if "Offline Mode" in body.get("reply", "") or "fallback" in body.get("reply", "").lower():
                 print("SUCCESS: Chat fallback activated correctly.")
             else:
                 print("FAILURE: Chat response didn't contain fallback message.")

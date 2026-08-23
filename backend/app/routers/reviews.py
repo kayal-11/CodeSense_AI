@@ -228,6 +228,38 @@ async def get_review_detail(
     }
 
 
+@router.delete('/history/all')
+async def delete_all_reviews(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    query = db.query(Review)
+    if current_user:
+        query = query.filter(Review.user_id == current_user.id)
+    deleted_count = query.delete(synchronize_session=False)
+    db.commit()
+    ANALYSIS_CACHE.clear()
+    return {'message': f'Successfully deleted {deleted_count} review(s).', 'deleted_count': deleted_count}
+
+
+@router.delete('/{review_id}')
+async def delete_review(
+    review_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    query = db.query(Review).filter(Review.id == review_id)
+    if current_user:
+        query = query.filter(Review.user_id == current_user.id)
+    r = query.first()
+    if not r:
+        raise HTTPException(status_code=404, detail='Review artifact not found')
+    db.delete(r)
+    db.commit()
+    ANALYSIS_CACHE.clear()
+    return {'message': 'Review artifact deleted successfully.', 'id': review_id}
+
+
 @router.post('/', response_model=ReviewResponse)
 async def review_code(
     payload: ReviewRequest,

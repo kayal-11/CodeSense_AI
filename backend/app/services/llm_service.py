@@ -3,7 +3,6 @@ from typing import Any
 from app.ai.base import BaseAIProvider
 from app.ai.fallback import FallbackProvider
 from app.ai.groq import GroqProvider
-from app.ai.ollama import OllamaProvider
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -12,13 +11,12 @@ logger = logging.getLogger(__name__)
 class LLMService:
     """
     Service coordinating AI providers.
-    Dynamically routes requests based on LLM_PROVIDER ('groq' or 'ollama').
+    Routes requests to GroqProvider.
     Falls back to FallbackProvider or static analysis review if configured provider is unavailable.
     """
 
     def __init__(self) -> None:
         self.groq_provider = GroqProvider()
-        self.ollama_provider = OllamaProvider()
         self.fallback_provider = FallbackProvider()
 
     @property
@@ -29,14 +27,7 @@ class LLMService:
         """
         Get the provider instance based on LLM_PROVIDER setting.
         """
-        provider_name = (settings.llm_provider or 'groq').strip().lower()
-        if provider_name == 'ollama':
-            return self.ollama_provider
-        elif provider_name == 'groq':
-            return self.groq_provider
-        else:
-            logger.warning(f"Unknown LLM_PROVIDER '{provider_name}'. Defaulting to Groq provider.")
-            return self.groq_provider
+        return self.groq_provider
 
     def _build_static_fallback_review(self, language: str, static_analysis: dict[str, Any]) -> dict[str, Any]:
         issues = static_analysis.get('issues', []) if isinstance(static_analysis, dict) else []
