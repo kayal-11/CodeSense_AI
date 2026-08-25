@@ -1,6 +1,7 @@
 import re
 from typing import Any
 from app.ai.base import BaseAIProvider
+from app.analysis.code_formatter import format_code_snippet
 from config.settings import settings
 
 
@@ -212,14 +213,14 @@ class FallbackProvider(BaseAIProvider):
             "level_1_brute_force": {
                 "explanation": f"Brute force solution for {prob_title} checking all element pairs/subsets.",
                 "algorithm": "1. Iterate through elements with nested loops.\n2. Verify conditions for each pair.\n3. Return answer.",
-                "code": code,
+                "code": format_code_snippet(code, language),
                 "time_space_complexity": "Time: O(N^2), Space: O(1)",
                 "why_inefficient": "Redundant checking of every pair leads to quadratic execution time."
             },
             "level_2_better_approach": {
                 "explanation": f"Improved solution for {prob_title} utilizing sorting or two-pointer strategy.",
                 "algorithm": "1. Sort input array or build index map.\n2. Traversal with single pass or binary search.\n3. Return result.",
-                "code": code,
+                "code": format_code_snippet(code, language),
                 "time_space_complexity": "Time: O(N log N), Space: O(N)",
                 "improvement_over_level_1": "Reduces iterations from quadratic O(N^2) to linearithmic or linear time."
             },

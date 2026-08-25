@@ -6,8 +6,9 @@ import { motion } from 'framer-motion';
 import axios from 'axios';
 import { detectLanguage } from '../utils/languageDetection';
 import { deriveComplexity } from '../utils/complexityAnalysis';
-import { Copy, Download, Save, Sparkles, Upload } from 'lucide-react';
+import { Copy, Download, Plus, Save, Sparkles, Upload } from 'lucide-react';
 import { detectSyntaxErrors, recalculateFindingLine } from '../utils/syntaxChecker';
+import { formatCodeSnippet } from '../utils/codeFormatter';
 
 const configuredApiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim();
 const API_BASE = configuredApiBase && configuredApiBase.length > 0 ? configuredApiBase.replace(/\/$/, '') : '/api';
@@ -620,6 +621,30 @@ const ReviewPage = () => {
     }
   }, []);
 
+  const handleNewSession = useCallback(() => {
+    setActiveReviewId(null);
+    setProblemUrl('');
+    const defaultTemplate = templateForLanguage(DEFAULT_LANGUAGE);
+    setCode(defaultTemplate.sampleCode);
+    setFileNameHint(defaultTemplate.fileName);
+    setLanguage(DEFAULT_LANGUAGE);
+    setDetectedLanguage(defaultTemplate.label);
+    setDetectionConfidence('high');
+    setDetectionReason('Initialized with language template.');
+    setAutoDetectEnabled(true);
+    clearAnalysisStateAndHighlights();
+    lastAnalyzedCodeRef.current = '';
+    setError(null);
+    setSaveSuccess(false);
+
+    try {
+      localStorage.removeItem('codesense_saved_editor');
+      if (typeof window !== 'undefined' && window.history?.replaceState) {
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+    } catch {}
+  }, [clearAnalysisStateAndHighlights]);
+
   const handleCodeChange = useCallback((newCode: string) => {
     setCode(newCode);
     try {
@@ -973,6 +998,16 @@ const ReviewPage = () => {
       refactoredCode.trim();
     return unescapeCode(raw);
   }, [learningAssistant, refactoredCode]);
+
+  const level1FormattedCode = useMemo(() => {
+    const raw = learningAssistant?.level_1_brute_force?.code;
+    return formatCodeSnippet(raw, language);
+  }, [learningAssistant, language]);
+
+  const level2FormattedCode = useMemo(() => {
+    const raw = learningAssistant?.level_2_better_approach?.code;
+    return formatCodeSnippet(raw, language);
+  }, [learningAssistant, language]);
 
   const isAlreadyOptimal = useMemo(() => {
     if (learningAssistant?.level_3_optimized_solution?.is_already_optimal) return true;
@@ -1403,6 +1438,15 @@ const ReviewPage = () => {
           </div>
           <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={handleNewSession}
+                className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200 hover:border-cyan-500 hover:text-cyan-300 transition"
+                title="Start a new code review session"
+              >
+                <Plus className="h-4 w-4 text-cyan-300" />
+                New
+              </button>
               <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200 hover:border-cyan-500 transition">
                 <Upload className="h-4 w-4 text-cyan-300" />
                 Upload source file
@@ -1610,15 +1654,15 @@ const ReviewPage = () => {
                           : learningAssistant?.level_1_brute_force?.algorithm || '1. Iterate through elements with nested loops.\n2. Compare combinations step-by-step.\n3. Return result when condition is met.'}
                       </div>
                     </div>
-                    {learningAssistant?.level_1_brute_force?.code && (
+                    {level1FormattedCode && (
                       <div className="mt-2 rounded-lg border border-slate-800 bg-slate-900 p-2 font-mono text-[11px] text-slate-200 overflow-x-auto">
                         <div className="flex items-center justify-between pb-1 border-b border-slate-800 mb-1.5 text-[10px] text-slate-400">
                           <span>Code ({language.toUpperCase()})</span>
                           <button
                             type="button"
                             onClick={() => {
-                              if (learningAssistant?.level_1_brute_force?.code) {
-                                navigator.clipboard.writeText(learningAssistant.level_1_brute_force.code);
+                              if (level1FormattedCode) {
+                                navigator.clipboard.writeText(level1FormattedCode);
                               }
                             }}
                             className="hover:text-cyan-300 transition"
@@ -1626,7 +1670,7 @@ const ReviewPage = () => {
                             Copy Code
                           </button>
                         </div>
-                        <pre className="whitespace-pre-wrap">{learningAssistant.level_1_brute_force.code}</pre>
+                        <pre className="whitespace-pre-wrap font-mono text-[11px] leading-relaxed">{level1FormattedCode}</pre>
                       </div>
                     )}
                     <p><span className="font-semibold text-rose-300">Why It Is Inefficient:</span> {learningAssistant?.level_1_brute_force?.why_inefficient || 'Repeated nested loops create quadratic execution overhead.'}</p>
@@ -1653,15 +1697,15 @@ const ReviewPage = () => {
                           : learningAssistant?.level_2_better_approach?.algorithm || '1. Sort input array or initialize index structure.\n2. Traverse data in single pass or with binary search.\n3. Return result.'}
                       </div>
                     </div>
-                    {learningAssistant?.level_2_better_approach?.code && (
+                    {level2FormattedCode && (
                       <div className="mt-2 rounded-lg border border-slate-800 bg-slate-900 p-2 font-mono text-[11px] text-slate-200 overflow-x-auto">
                         <div className="flex items-center justify-between pb-1 border-b border-slate-800 mb-1.5 text-[10px] text-slate-400">
                           <span>Code ({language.toUpperCase()})</span>
                           <button
                             type="button"
                             onClick={() => {
-                              if (learningAssistant?.level_2_better_approach?.code) {
-                                navigator.clipboard.writeText(learningAssistant.level_2_better_approach.code);
+                              if (level2FormattedCode) {
+                                navigator.clipboard.writeText(level2FormattedCode);
                               }
                             }}
                             className="hover:text-cyan-300 transition"
@@ -1669,7 +1713,7 @@ const ReviewPage = () => {
                             Copy Code
                           </button>
                         </div>
-                        <pre className="whitespace-pre-wrap">{learningAssistant.level_2_better_approach.code}</pre>
+                        <pre className="whitespace-pre-wrap font-mono text-[11px] leading-relaxed">{level2FormattedCode}</pre>
                       </div>
                     )}
                     <p><span className="font-semibold text-amber-300">Improvement Over Level 1:</span> {learningAssistant?.level_2_better_approach?.improvement_over_level_1 || 'Significantly reduces iterations compared to the brute force method.'}</p>

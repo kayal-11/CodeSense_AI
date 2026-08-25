@@ -277,6 +277,29 @@ async def review_code(
     if cached_entry and cached_entry[0] == settings_hash and not payload.review_id:
         cached_response = cached_entry[1].model_copy(deep=True)
         cached_response.cached = True
+        fname = (payload.filename or '').strip() or f"example.{payload.language}"
+        now_time = datetime.now(timezone.utc)
+        serialized_report = json.dumps(cached_response.model_dump())
+        db_review = Review(
+            user_id=current_user.id if current_user else None,
+            filename=fname,
+            language=normalized_language,
+            score=cached_response.score or 0,
+            risk=cached_response.severity_breakdown.get('critical', 0) > 0 and 'Critical' or 'Low',
+            findings_count=len(cached_response.issues or []),
+            summary=cached_response.summary,
+            code=payload.code,
+            report_json=serialized_report,
+            created_at=now_time,
+        )
+        try:
+            db.add(db_review)
+            db.commit()
+            db.refresh(db_review)
+            cached_response.id = db_review.id
+        except Exception as db_exc:
+            logger.exception('Failed to save cached review into database: %s', db_exc)
+            db.rollback()
         return cached_response
 
     problem_info = None
@@ -389,14 +412,6 @@ async def review_code(
             if current_user:
                 query = query.filter(Review.user_id == current_user.id)
             target_review = query.first()
-
-        if not target_review and current_user:
-            # Check for existing review with exact same filename & code for this user to avoid duplicates
-            target_review = db.query(Review).filter(
-                Review.user_id == current_user.id,
-                Review.filename == fname,
-                Review.code == payload.code
-            ).first()
 
         try:
             if target_review:

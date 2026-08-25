@@ -5,6 +5,7 @@ from typing import Any
 import httpx
 
 from app.ai.base import BaseAIProvider
+from app.analysis.code_formatter import format_code_snippet
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -402,14 +403,14 @@ class GroqProvider(BaseAIProvider):
                         "level_1_brute_force": {
                             "explanation": str(raw_lvl1_bf.get("explanation", "Naive brute force approach.")),
                             "algorithm": raw_lvl1_bf.get("algorithm", "Iterate over elements."),
-                            "code": str(raw_lvl1_bf.get("code", code)).strip(),
+                            "code": format_code_snippet(str(raw_lvl1_bf.get("code", code)).strip(), language),
                             "time_space_complexity": str(raw_lvl1_bf.get("time_space_complexity", "Time: O(N^2), Space: O(1)")),
                             "why_inefficient": str(raw_lvl1_bf.get("why_inefficient", "Nested iteration causes quadratic overhead.")),
                         },
                         "level_2_better_approach": {
                             "explanation": str(raw_lvl2_ba.get("explanation", "Better approach reducing iterations.")),
                             "algorithm": raw_lvl2_ba.get("algorithm", "Use auxiliary structure or pointer techniques."),
-                            "code": str(raw_lvl2_ba.get("code", clean_opt_code or code)).strip(),
+                            "code": format_code_snippet(str(raw_lvl2_ba.get("code", clean_opt_code or code)).strip(), language),
                             "time_space_complexity": str(raw_lvl2_ba.get("time_space_complexity", "Time: O(N log N), Space: O(N)")),
                             "improvement_over_level_1": str(raw_lvl2_ba.get("improvement_over_level_1", "Improves overall runtime efficiency.")),
                         },
