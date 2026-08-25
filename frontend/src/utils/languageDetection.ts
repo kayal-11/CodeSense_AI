@@ -25,30 +25,45 @@ const extensionToLanguage: Record<string, string> = {
 };
 
 const patternRules: PatternRule[] = [
-  // High confidence signatures for Python, Java, C++, C
-  { language: 'java', weight: 4, regex: /^\s*public\s+class\s+[A-Z][A-Za-z0-9_]*\b/m },
+  // Java
+  { language: 'java', weight: 5, regex: /^\s*(public|private|protected)\s+(class|interface|enum)\b/m },
+  { language: 'java', weight: 5, regex: /\bpublic\s+static\s+void\s+main\s*\(/ },
   { language: 'java', weight: 4, regex: /^\s*package\s+[a-zA-Z_][\w.]*\s*;/m },
   { language: 'java', weight: 4, regex: /^\s*import\s+java\.[\w.*]+\s*;/m },
-  { language: 'java', weight: 3, regex: /\bSystem\.out\.println\s*\(/ },
+  { language: 'java', weight: 3, regex: /\bSystem\.(out|err)\.print(ln)?\s*\(/ },
+  { language: 'java', weight: 3, regex: /\bnew\s+[A-Z][A-Za-z0-9_]*\s*<.*>\s*\(/ },
+  { language: 'java', weight: 2, regex: /\b(String|Integer|Boolean|Double|List|Map|HashMap|ArrayList)\s+[a-zA-Z_]\w*\s*=/ },
 
-  { language: 'python', weight: 4, regex: /^\s*def\s+[a-zA-Z_]\w*\s*\(/m },
-  { language: 'python', weight: 3, regex: /^\s*import\s+[a-zA-Z_][\w.]*\s*$/m },
+  // Python
+  { language: 'python', weight: 5, regex: /^\s*def\s+[a-zA-Z_]\w*\s*\(/m },
+  { language: 'python', weight: 5, regex: /^\s*class\s+[a-zA-Z_]\w*\s*(\(.*\))?\s*:/m },
+  { language: 'python', weight: 4, regex: /^\s*(from\s+[a-zA-Z0-9_.]+\s+)?import\s+/m },
   { language: 'python', weight: 5, regex: /if\s+__name__\s*==\s*["']__main__["']\s*:/m },
-  { language: 'python', weight: 2, regex: /^\s*from\s+[a-zA-Z0-9_.]+\s+import\s+/m },
+  { language: 'python', weight: 3, regex: /\bprint\s*\(.*\)/ },
+  { language: 'python', weight: 3, regex: /:\s*#.*$/m },
+  { language: 'python', weight: 3, regex: /^\s*(elif|except)\b/m },
+  { language: 'python', weight: 2, regex: /self\.[a-zA-Z_]\w*/ },
 
-  { language: 'cpp', weight: 5, regex: /^\s*#include\s*<iostream>\s*$/m },
-  { language: 'cpp', weight: 5, regex: /^\s*#include\s*<(vector|map|unordered_map|algorithm|string)>\s*$/m },
-  { language: 'cpp', weight: 4, regex: /\busing\s+namespace\s+std\s*;/m },
-  { language: 'cpp', weight: 3, regex: /\bstd::(cout|cin|vector|string)\b/ },
+  // C++
+  { language: 'cpp', weight: 5, regex: /^\s*#include\s*<(iostream|vector|map|unordered_map|algorithm|string|set|queue|stack|bits\/stdc\+\+\.h)>\s*$/m },
+  { language: 'cpp', weight: 5, regex: /\busing\s+namespace\s+std\s*;/m },
+  { language: 'cpp', weight: 4, regex: /\bstd::(cout|cin|cerr|vector|string|map|set|unique_ptr|shared_ptr)\b/ },
+  { language: 'cpp', weight: 4, regex: /\b(cout|cin)\s*<<|\bcin\s*>>/ },
+  { language: 'cpp', weight: 3, regex: /\bvector\s*<\s*[\w:]+\s*>/ },
+  { language: 'cpp', weight: 3, regex: /\btemplate\s*<\s*typename\b|\btemplate\s*<\s*class\b/ },
+  { language: 'cpp', weight: 3, regex: /\bstatic_cast\s*<|\bdynamic_cast\s*</ },
 
-  { language: 'c', weight: 5, regex: /^\s*#include\s*<stdio\.h>\s*$/m },
-  { language: 'c', weight: 4, regex: /\bprintf\s*\(/ },
-  { language: 'c', weight: 3, regex: /\bint\s+main\s*\(\s*(void)?\s*\)/ },
+  // C
+  { language: 'c', weight: 5, regex: /^\s*#include\s*<(stdio\.h|stdlib\.h|string\.h|math\.h|stdbool\.h|limits\.h)>\s*$/m },
+  { language: 'c', weight: 4, regex: /\b(printf|scanf|malloc|free|calloc|realloc)\s*\(/ },
+  { language: 'c', weight: 4, regex: /\bint\s+main\s*\(\s*(void|int\s+argc)?/ },
+  { language: 'c', weight: 3, regex: /\bstruct\s+[a-zA-Z_]\w*\s*\{/ },
+  { language: 'c', weight: 3, regex: /#define\s+[A-Z0-9_]+\s+/ },
 ];
 
 const scoreThresholds = {
-  high: 6,
-  medium: 4,
+  high: 5,
+  medium: 3,
 };
 
 const labelForLanguage = (language: string): string => {

@@ -798,6 +798,13 @@ const ReviewPage = () => {
       setFileNameHint(file.name);
       setCode(text);
       setError(null);
+      if (autoDetectEnabled) {
+        const detection = detectLanguage(text, file.name);
+        const autoLang = supportedLanguages.has(detection.language) ? (detection.language as SupportedLanguage) : 'python';
+        if (isSupportedLanguage(autoLang)) {
+          setLanguage(autoLang);
+        }
+      }
     } catch {
       setError('Unable to read uploaded file. Please try another file or paste code manually.');
     } finally {
@@ -823,7 +830,7 @@ const ReviewPage = () => {
     setAutoDetectEnabled(enabled);
     if (enabled) {
       const detection = detectLanguage(code, fileNameHint);
-      const autoLanguage = supportedLanguages.has(detection.language) ? detection.language : 'plaintext';
+      const autoLanguage = supportedLanguages.has(detection.language) ? (detection.language as SupportedLanguage) : 'python';
       if (isSupportedLanguage(autoLanguage)) {
         setLanguage(autoLanguage);
       }
@@ -883,6 +890,8 @@ const ReviewPage = () => {
           activeReviewId: payload.id || activeReviewId,
           payload,
         }));
+        window.dispatchEvent(new CustomEvent('codesense_review_completed'));
+        localStorage.setItem('codesense_last_review_time', String(Date.now()));
       } catch {}
     } catch (err: any) {
       console.error('Error running code review:', err);

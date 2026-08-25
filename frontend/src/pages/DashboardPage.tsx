@@ -10,6 +10,16 @@ const configuredApiBase = (import.meta.env.VITE_API_BASE_URL as string | undefin
 const API_BASE = configuredApiBase && configuredApiBase.length > 0 ? configuredApiBase.replace(/\/$/, '') : '/api';
 const apiUrl = (path: string): string => `${API_BASE}${path.startsWith('/') ? path : `/${path}`}`;
 
+interface WeeklyActivityItem {
+  name: string;
+  score: number;
+  level: string;
+  solved: number;
+  date?: string;
+  is_today?: boolean;
+  is_future?: boolean;
+}
+
 interface DashboardData {
   problems_solved: number;
   problems_needing_improvement: number;
@@ -18,13 +28,34 @@ interface DashboardData {
   best_streak: number;
   difficulty: { easy: number; medium: number; hard: number };
   level_progression: { level_1: number; level_2: number; level_3: number };
-  progress_trend: Array<{ name: string; score: number; level: string; solved: number }>;
-  weekly_activity: Array<{ name: string; score: number; level: string; solved: number }>;
+  progress_trend: Array<WeeklyActivityItem>;
+  weekly_activity: Array<WeeklyActivityItem>;
   topic_mastery: Array<{ name: string; mastery: number; solved: number; color: string }>;
   weak_topics: string[];
   recommendations: string[];
   languages_supported: string[];
 }
+
+const getWeekInfo = (dayIndex: number) => {
+  const now = new Date();
+  const todayDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const currentDayOfWeek = now.getDay();
+  const distanceToMonday = (currentDayOfWeek + 6) % 7;
+  const monday = new Date(todayDate);
+  monday.setDate(todayDate.getDate() - distanceToMonday);
+
+  const targetDate = new Date(monday);
+  targetDate.setDate(monday.getDate() + dayIndex);
+
+  const dayNum = targetDate.getDate();
+  const monthStr = targetDate.toLocaleString('en-US', { month: 'short' });
+  const dateStr = `${dayNum} ${monthStr}`;
+
+  const isToday = targetDate.getTime() === todayDate.getTime();
+  const isFuture = targetDate.getTime() > todayDate.getTime();
+
+  return { dateStr, isToday, isFuture };
+};
 
 const defaultDashboard: DashboardData = {
   problems_solved: 0,
@@ -88,6 +119,26 @@ const DashboardPage = () => {
     };
 
     fetchDashboardStats();
+
+    // Real-time updates: polling interval while dashboard is open
+    const interval = setInterval(fetchDashboardStats, 3000);
+
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === 'codesense_last_review_time') {
+        fetchDashboardStats();
+      }
+    };
+
+    window.addEventListener('focus', fetchDashboardStats);
+    window.addEventListener('codesense_review_completed', fetchDashboardStats);
+    window.addEventListener('storage', handleStorageChange);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', fetchDashboardStats);
+      window.removeEventListener('codesense_review_completed', fetchDashboardStats);
+      window.removeEventListener('storage', handleStorageChange);
+    };
   }, [token]);
 
   const totalLevelSolved = (data.level_progression.level_1 + data.level_progression.level_2 + data.level_progression.level_3) || 1;
@@ -246,21 +297,40 @@ const DashboardPage = () => {
 
           {/* Weekly Practice Activity Bar */}
           <div className="rounded-3xl border border-slate-800 bg-slate-900/80 p-6 shadow-glow">
-            <h2 className="text-xl font-semibold text-white mb-1">Weekly Activity Heat</h2>
+            <h2 className="text-xl font-semibold text-white mb-1">Weekly Activity</h2>
             <p className="text-xs text-slate-400 mb-4">Daily DSA submissions across C, C++, Java, and Python</p>
             <div className="grid grid-cols-7 gap-2 text-center">
-              {data.weekly_activity.map((d) => (
-                <div key={d.name} className="flex flex-col items-center gap-2">
-                  <div className="w-full bg-slate-950/80 rounded-xl p-3 border border-slate-800 flex flex-col items-center justify-end h-24">
-                    <div
-                      className="w-full bg-cyan-500/80 rounded-lg transition-all"
-                      style={{ height: `${Math.min(100, (d.solved / maxWeeklySolved) * 100)}%` }}
-                    />
+              {data.weekly_activity.map((d, idx) => {
+                const info = getWeekInfo(idx);
+                const isFutureDay = d.is_future ?? info.isFuture;
+                const isTodayDay = d.is_today ?? info.isToday;
+                const dateLabel = d.date || info.dateStr;
+                const displaySolved = isFutureDay ? 0 : d.solved;
+
+                return (
+                  <div key={d.name} className="flex flex-col items-center gap-2">
+                    <div className="w-full bg-slate-950/80 rounded-xl p-3 border border-slate-800 flex flex-col items-center justify-end h-24">
+                      <div
+                        className={`w-full rounded-lg transition-all ${
+                          displaySolved > 0
+                            ? isTodayDay
+                              ? 'bg-cyan-400'
+                              : 'bg-cyan-500/80'
+                            : 'bg-slate-800/30'
+                        }`}
+                        style={{ height: `${displaySolved > 0 ? Math.min(100, (displaySolved / maxWeeklySolved) * 100) : 0}%` }}
+                      />
+                    </div>
+                    <span className="text-xs font-semibold text-slate-300">{d.name}</span>
+                    <span className={`text-[10px] ${isFutureDay ? 'text-slate-500' : 'text-cyan-400'}`}>
+                      {displaySolved} solved
+                    </span>
+                    <span className={`text-[10px] ${isTodayDay ? 'text-cyan-300 font-semibold' : 'text-slate-400'}`}>
+                      {dateLabel}
+                    </span>
                   </div>
-                  <span className="text-xs font-semibold text-slate-300">{d.name}</span>
-                  <span className="text-[10px] text-cyan-400">{d.solved} solved</span>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>

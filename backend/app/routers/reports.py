@@ -42,6 +42,18 @@ def _calculate_streaks(dates: list[datetime]) -> tuple[int, int, bool]:
     return current_streak, max(best_streak, current_streak), today_completed
 
 
+def _to_date(dt: Any) -> Any:
+    if dt is None:
+        return None
+    try:
+        return dt.astimezone().date()
+    except Exception:
+        try:
+            return dt.date()
+        except Exception:
+            return None
+
+
 @router.get('/dashboard')
 @router.get('/')
 def get_dashboard_reports(
@@ -53,6 +65,58 @@ def get_dashboard_reports(
         query = query.filter(Review.user_id == current_user.id)
     reviews = query.order_by(Review.created_at.asc()).all()
 
+    today_dt = datetime.now()
+    today_date = today_dt.date()
+    monday_date = today_date - timedelta(days=today_dt.weekday())
+
+    def _make_day_data(idx: int, day_name: str) -> tuple[dict[str, Any], dict[str, Any]]:
+        target_date = monday_date + timedelta(days=idx)
+        date_str = f"{target_date.day} {target_date.strftime('%b')}"
+        is_today = (target_date == today_date)
+        is_future = (target_date > today_date)
+
+        if is_future:
+            cnt = 0
+            day_avg = 0
+            lvl = 'Level 1: Brute Force'
+        else:
+            day_reviews = [r for r in reviews if r.created_at and _to_date(r.created_at) == target_date]
+            cnt = len(day_reviews)
+            scores = [r.score for r in day_reviews]
+            day_avg = round(sum(scores) / len(scores)) if scores else (avg_accuracy if 'avg_accuracy' in locals() and cnt > 0 else 0)
+            if day_avg > 90:
+                lvl = 'Level 3: Optimized Solution'
+            elif day_avg >= 80:
+                lvl = 'Level 2: Better Approach'
+            else:
+                lvl = 'Level 1: Brute Force'
+
+        weekly_item = {
+            'name': day_name,
+            'solved': cnt,
+            'date': date_str,
+            'is_today': is_today,
+            'is_future': is_future,
+        }
+        trend_item = {
+            'name': day_name,
+            'score': day_avg,
+            'level': lvl,
+            'solved': cnt,
+            'date': date_str,
+            'is_today': is_today,
+            'is_future': is_future,
+        }
+        return weekly_item, trend_item
+
+    avg_accuracy = round(sum(r.score for r in reviews) / len(reviews)) if reviews else 0
+    weekly_activity = []
+    progress_trend = []
+    for i, dname in enumerate(['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']):
+        w_item, t_item = _make_day_data(i, dname)
+        weekly_activity.append(w_item)
+        progress_trend.append(t_item)
+
     if not reviews:
         return {
             'problems_solved': 0,
@@ -63,24 +127,8 @@ def get_dashboard_reports(
             'today_completed': False,
             'difficulty': {'easy': 0, 'medium': 0, 'hard': 0},
             'level_progression': {'level_1': 0, 'level_2': 0, 'level_3': 0},
-            'progress_trend': [
-                {'name': 'Mon', 'score': 0, 'level': 'Level 1: Brute Force', 'solved': 0},
-                {'name': 'Tue', 'score': 0, 'level': 'Level 1: Brute Force', 'solved': 0},
-                {'name': 'Wed', 'score': 0, 'level': 'Level 1: Brute Force', 'solved': 0},
-                {'name': 'Thu', 'score': 0, 'level': 'Level 1: Brute Force', 'solved': 0},
-                {'name': 'Fri', 'score': 0, 'level': 'Level 1: Brute Force', 'solved': 0},
-                {'name': 'Sat', 'score': 0, 'level': 'Level 1: Brute Force', 'solved': 0},
-                {'name': 'Sun', 'score': 0, 'level': 'Level 1: Brute Force', 'solved': 0},
-            ],
-            'weekly_activity': [
-                {'name': 'Mon', 'solved': 0},
-                {'name': 'Tue', 'solved': 0},
-                {'name': 'Wed', 'solved': 0},
-                {'name': 'Thu', 'solved': 0},
-                {'name': 'Fri', 'solved': 0},
-                {'name': 'Sat', 'solved': 0},
-                {'name': 'Sun', 'solved': 0},
-            ],
+            'progress_trend': progress_trend,
+            'weekly_activity': weekly_activity,
             'topic_mastery': [
                 {'name': 'Arrays & Strings', 'mastery': 0, 'solved': 0, 'color': 'bg-cyan-400'},
                 {'name': 'Stack, Queue & Linked List', 'mastery': 0, 'solved': 0, 'color': 'bg-emerald-400'},
@@ -95,7 +143,6 @@ def get_dashboard_reports(
         }
 
     total_solved = len(reviews)
-    avg_accuracy = round(sum(r.score for r in reviews) / total_solved)
     needing_improvement = sum(1 for r in reviews if r.score < 85 or r.findings_count > 0)
 
     dates = [r.created_at for r in reviews if r.created_at is not None]
@@ -110,30 +157,6 @@ def get_dashboard_reports(
     lvl1_cnt = sum(1 for r in reviews if r.score < 80)
     lvl2_cnt = sum(1 for r in reviews if 80 <= r.score <= 90)
     lvl3_cnt = sum(1 for r in reviews if r.score > 90)
-
-    # Weekly Activity by Day of Week (Mon-Sun)
-    day_counts = {'Mon': 0, 'Tue': 0, 'Wed': 0, 'Thu': 0, 'Fri': 0, 'Sat': 0, 'Sun': 0}
-    day_scores: dict[str, list[int]] = {'Mon': [], 'Tue': [], 'Wed': [], 'Thu': [], 'Fri': [], 'Sat': [], 'Sun': []}
-
-    for r in reviews:
-        if r.created_at:
-            day_str = r.created_at.strftime('%a')
-            if day_str in day_counts:
-                day_counts[day_str] += 1
-                day_scores[day_str].append(r.score)
-
-    progress_trend = []
-    for day in ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']:
-        scores = day_scores[day]
-        cnt = day_counts[day]
-        day_avg = round(sum(scores) / len(scores)) if scores else avg_accuracy
-        if day_avg > 90:
-            lvl = 'Level 3: Optimized Solution'
-        elif day_avg >= 80:
-            lvl = 'Level 2: Better Approach'
-        else:
-            lvl = 'Level 1: Brute Force'
-        progress_trend.append({'name': day, 'score': day_avg, 'level': lvl, 'solved': cnt})
 
     # Categorize into DSA topics
     topic_data: dict[str, list[int]] = {
