@@ -237,6 +237,17 @@ class FallbackProvider(BaseAIProvider):
                 "is_already_optimal": True,
                 "summary": "Fallback analyzer provided heuristics review.",
                 "explanations": ["Current code checked against offline rules."]
+            },
+            "dsa_puzzle": {
+                "question": f"What is the main bottleneck in the Level 1 brute force approach for {prob_title}?",
+                "options": [
+                    "Memory leak from unclosed file handle",
+                    "Nested iteration over elements causing O(N²) quadratic time complexity",
+                    "Call stack overflow from deep recursion",
+                    "Thread deadlock during resource allocation"
+                ],
+                "correct_index": 1,
+                "explanation": "Nested loops iterate through elements repeatedly, leading to quadratic execution time O(N²)."
             }
         }
 

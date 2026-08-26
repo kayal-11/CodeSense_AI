@@ -257,6 +257,12 @@ class GroqProvider(BaseAIProvider):
             '    "time_space_complexity": "Time: O(N log N), Space: O(1)",\n'
             '    "improvement_over_level_1": "Reduces time complexity from quadratic O(N^2) to linearithmic O(N log N) by sorting first."\n'
             '  },\n'
+            '  "dsa_puzzle": {\n'
+            '    "question": "DSA-related multiple choice question testing understanding of the analyzed code or complexity.",\n'
+            '    "options": ["Option A text", "Option B text", "Option C text", "Option D text"],\n'
+            '    "correct_index": 0,\n'
+            '    "explanation": "One sentence explanation of the correct answer."\n'
+            '  },\n'
             '  "level_1_hint": "Check hash map lookup efficiency for linear time complexity.",\n'
             '  "level_2_approach": "Scan the collection once while storing complements in hash table.",\n'
             '  "level_3_solution_summary": "Linear time complexity solution using hash map for O(1) lookups."\n'
@@ -433,6 +439,19 @@ class GroqProvider(BaseAIProvider):
                             "explanations": [lvl3_sum],
                         }
                     }
+
+                    raw_dsa_puzzle = result.get("dsa_puzzle")
+                    if isinstance(raw_dsa_puzzle, dict) and "question" in raw_dsa_puzzle and "options" in raw_dsa_puzzle:
+                        opts = raw_dsa_puzzle.get("options", [])
+                        if isinstance(opts, list) and len(opts) == 4:
+                            c_idx = self._to_int(raw_dsa_puzzle.get("correct_index", 0), 0)
+                            c_idx = max(0, min(3, c_idx))
+                            learning_assistant["dsa_puzzle"] = {
+                                "question": str(raw_dsa_puzzle.get("question", "")).strip(),
+                                "options": [str(o) for o in opts],
+                                "correct_index": c_idx,
+                                "explanation": str(raw_dsa_puzzle.get("explanation", "Review algorithmic complexity to pick optimal approach.")).strip()
+                            }
 
                     normalized = {
                         "summary": summary_text,

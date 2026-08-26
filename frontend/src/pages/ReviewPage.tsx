@@ -6,7 +6,7 @@ import { motion } from 'framer-motion';
 import axios from 'axios';
 import { detectLanguage } from '../utils/languageDetection';
 import { deriveComplexity } from '../utils/complexityAnalysis';
-import { Copy, Download, Plus, Save, Sparkles, Upload } from 'lucide-react';
+import { Brain, CheckCircle2, Copy, Download, Lock, Plus, Save, Sparkles, Unlock, Upload, X, XCircle } from 'lucide-react';
 import { detectSyntaxErrors, recalculateFindingLine } from '../utils/syntaxChecker';
 import { formatCodeSnippet } from '../utils/codeFormatter';
 
@@ -153,6 +153,14 @@ interface Level2BetterApproach {
   improvement_over_level_1?: string;
 }
 
+interface DSAPuzzle {
+  question: string;
+  options: [string, string, string, string] | string[];
+  correctAnswerIndex?: number;
+  correct_index?: number;
+  explanation: string;
+}
+
 interface ReviewResponse {
   id?: number;
   summary: string;
@@ -172,6 +180,7 @@ interface ReviewResponse {
   unit_test_suggestions?: string[];
   severity_breakdown?: Record<string, number>;
   learning_assistant?: {
+    dsa_puzzle?: DSAPuzzle;
     level_1_hint?: string[];
     level_2_guidance?: string[];
     level_1_brute_force?: Level1BruteForce;
@@ -574,7 +583,13 @@ const computeModifiedLines = (original: string, optimized: string): number[] => 
 const ReviewPage = () => {
   const location = useLocation();
   const [activeReviewId, setActiveReviewId] = useState<number | null>(null);
-  const [problemUrl, setProblemUrl] = useState('');
+  const [problemUrl, setProblemUrl] = useState(() => {
+    try {
+      return sessionStorage.getItem('codesense_problem_url') || '';
+    } catch {
+      return '';
+    }
+  });
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [code, setCode] = useState(LANGUAGE_TEMPLATES[DEFAULT_LANGUAGE].sampleCode);
   const [fileNameHint, setFileNameHint] = useState(LANGUAGE_TEMPLATES[DEFAULT_LANGUAGE].fileName);
@@ -600,6 +615,12 @@ const ReviewPage = () => {
   const [editorWidthPct, setEditorWidthPct] = useState(68);
   const [splitterDragging, setSplitterDragging] = useState(false);
   const [isWideLayout, setIsWideLayout] = useState(() => typeof window !== 'undefined' && window.innerWidth >= 1280);
+
+  const [isPuzzleSolved, setIsPuzzleSolved] = useState(false);
+  const [isPuzzleModalOpen, setIsPuzzleModalOpen] = useState(false);
+  const [selectedOptionIndex, setSelectedOptionIndex] = useState<number | null>(null);
+  const [puzzleSubmitted, setPuzzleSubmitted] = useState(false);
+  const [activePuzzle, setActivePuzzle] = useState<DSAPuzzle | null>(null);
   const localAnalysisCache = useRef<Map<string, ReviewResponse>>(new Map());
   const lastAnalyzedCodeRef = useRef<string>('');
   const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null);
@@ -620,6 +641,11 @@ const ReviewPage = () => {
     setRefactoredCode('');
     setSummary('Review ready to run.');
     setActiveLine(null);
+    setIsPuzzleSolved(false);
+    setIsPuzzleModalOpen(false);
+    setSelectedOptionIndex(null);
+    setPuzzleSubmitted(false);
+    setActivePuzzle(null);
 
     const editor = editorRef.current;
     const monaco = monacoRef.current;
@@ -632,9 +658,97 @@ const ReviewPage = () => {
     }
   }, []);
 
+  const getOrCreateDsaPuzzle = useCallback((
+    assistant?: ReviewResponse['learning_assistant'],
+    codeSnippet: string = ''
+  ): DSAPuzzle => {
+    const p = assistant?.dsa_puzzle;
+    if (p && p.question && Array.isArray(p.options) && p.options.length === 4) {
+      const rawIdx = p.correctAnswerIndex ?? p.correct_index ?? 0;
+      return {
+        question: p.question,
+        options: p.options,
+        correctAnswerIndex: Math.max(0, Math.min(3, rawIdx)),
+        explanation: p.explanation || 'Review algorithmic complexity to evaluate optimal approaches.'
+      };
+    }
+
+    const lvl1Complexity = assistant?.level_1_brute_force?.time_space_complexity || 'O(N²)';
+    const hasHashMap = codeSnippet.includes('Map') || codeSnippet.includes('dict') || codeSnippet.includes('HashMap') || codeSnippet.includes('unordered_map') || codeSnippet.includes('seen');
+    const hasSorting = codeSnippet.includes('sort') || codeSnippet.includes('Sort') || codeSnippet.includes('qsort');
+
+    if (hasHashMap) {
+      return {
+        question: "What is the average time complexity of looking up an element in a Hash Table?",
+        options: [
+          "O(N²)",
+          "O(N log N)",
+          "O(1)",
+          "O(N)"
+        ],
+        correctAnswerIndex: 2,
+        explanation: "Hash Tables provide O(1) average time complexity for lookups using direct key-to-bucket hashing."
+      };
+    }
+
+    if (hasSorting) {
+      return {
+        question: "What is the average time complexity of comparison-based sorting algorithms like QuickSort or MergeSort?",
+        options: [
+          "O(N)",
+          "O(N log N)",
+          "O(N²)",
+          "O(1)"
+        ],
+        correctAnswerIndex: 1,
+        explanation: "Comparison-based sorting algorithms have a lower-bound average time complexity of O(N log N)."
+      };
+    }
+
+    return {
+      question: `In the Level 1 Brute Force approach (${lvl1Complexity}), what primary factor causes performance inefficiency?`,
+      options: [
+        "Call stack overflow from recursive calls",
+        "Nested iterations repeatedly re-checking candidate elements",
+        "Garbage collection memory overhead",
+        "Buffer overflow in hardware cache"
+      ],
+      correctAnswerIndex: 1,
+      explanation: "Nested loops cause N × N iterations, leading to quadratic time complexity O(N²)."
+    };
+  }, []);
+
+  const handleOpenPuzzleModal = useCallback(() => {
+    const puzzle = getOrCreateDsaPuzzle(learningAssistant, code);
+    setActivePuzzle(puzzle);
+    setSelectedOptionIndex(null);
+    setPuzzleSubmitted(false);
+    setIsPuzzleModalOpen(true);
+  }, [getOrCreateDsaPuzzle, learningAssistant, code]);
+
+  const handleSubmitPuzzleAnswer = useCallback(() => {
+    if (selectedOptionIndex === null) return;
+    setPuzzleSubmitted(true);
+    setIsPuzzleSolved(true);
+  }, [selectedOptionIndex]);
+
+  const handleClosePuzzleModal = useCallback(() => {
+    setIsPuzzleModalOpen(false);
+  }, []);
+
+  const handleProblemUrlChange = useCallback((newUrl: string) => {
+    setProblemUrl(newUrl);
+    try {
+      sessionStorage.setItem('codesense_problem_url', newUrl);
+    } catch {}
+  }, []);
+
   const handleNewSession = useCallback(() => {
     setActiveReviewId(null);
     setProblemUrl('');
+    try {
+      sessionStorage.removeItem('codesense_problem_url');
+    } catch {}
     const defaultTemplate = templateForLanguage(DEFAULT_LANGUAGE);
     setCode(defaultTemplate.sampleCode);
     setFileNameHint(defaultTemplate.fileName);
@@ -941,18 +1055,55 @@ const ReviewPage = () => {
     }
   };
 
-  const auditSummary = useMemo(
-    () => parseAuditSummary(summary, score, complexityAnalysis, findings, code),
-    [summary, score, complexityAnalysis, findings, code]
-  );
+  const isProblemUrlActive = Boolean(problemUrl.trim());
+
+  const optimizedCodeForLevel3 = useMemo(() => {
+    const raw =
+      learningAssistant?.level_3_optimized_solution?.code?.trim() ||
+      refactoredCode.trim();
+    return unescapeCode(raw);
+  }, [learningAssistant, refactoredCode]);
+
+  const level1FormattedCode = useMemo(() => {
+    const raw = learningAssistant?.level_1_brute_force?.code;
+    return formatCodeSnippet(raw, language);
+  }, [learningAssistant, language]);
+
+  const level2FormattedCode = useMemo(() => {
+    const raw = learningAssistant?.level_2_better_approach?.code;
+    return formatCodeSnippet(raw, language);
+  }, [learningAssistant, language]);
+
+  const isAlreadyOptimal = useMemo(() => {
+    if (learningAssistant?.level_3_optimized_solution?.is_already_optimal) return true;
+    if (!optimizedCodeForLevel3) return true;
+    return optimizedCodeForLevel3.trim() === code.trim();
+  }, [learningAssistant, optimizedCodeForLevel3, code]);
+
+  const auditSummary = useMemo(() => {
+    const parsed = parseAuditSummary(summary, score, complexityAnalysis, findings, code);
+    if (isAlreadyOptimal) {
+      return {
+        ...parsed,
+        verdict: 'Current solution is optimal.',
+      };
+    }
+    return parsed;
+  }, [summary, score, complexityAnalysis, findings, code, isAlreadyOptimal]);
 
   const codeLines = useMemo(() => code.split('\n'), [code]);
 
   const realTimeSyntaxErrors = useMemo(() => detectSyntaxErrors(code, language), [code, language]);
 
-  const isProblemUrlActive = Boolean(problemUrl.trim());
-
   const { level1Errors, improvements } = useMemo(() => {
+    if (isAlreadyOptimal) {
+      return {
+        aiSuggestions: [],
+        level1Errors: [],
+        improvements: [],
+      };
+    }
+
     const deduped = new Map<string, FindingCard>();
     findings.forEach((finding) => {
       if (!isActionableSuggestion(finding, isProblemUrlActive)) return;
@@ -1022,30 +1173,7 @@ const ReviewPage = () => {
       level1Errors: errors,
       improvements: nonErrors,
     };
-  }, [findings, codeLines, realTimeSyntaxErrors, isProblemUrlActive]);
-
-  const optimizedCodeForLevel3 = useMemo(() => {
-    const raw =
-      learningAssistant?.level_3_optimized_solution?.code?.trim() ||
-      refactoredCode.trim();
-    return unescapeCode(raw);
-  }, [learningAssistant, refactoredCode]);
-
-  const level1FormattedCode = useMemo(() => {
-    const raw = learningAssistant?.level_1_brute_force?.code;
-    return formatCodeSnippet(raw, language);
-  }, [learningAssistant, language]);
-
-  const level2FormattedCode = useMemo(() => {
-    const raw = learningAssistant?.level_2_better_approach?.code;
-    return formatCodeSnippet(raw, language);
-  }, [learningAssistant, language]);
-
-  const isAlreadyOptimal = useMemo(() => {
-    if (learningAssistant?.level_3_optimized_solution?.is_already_optimal) return true;
-    if (!optimizedCodeForLevel3) return true;
-    return optimizedCodeForLevel3.trim() === code.trim();
-  }, [learningAssistant, optimizedCodeForLevel3, code]);
+  }, [findings, codeLines, realTimeSyntaxErrors, isProblemUrlActive, isAlreadyOptimal]);
 
   const modifiedLines = useMemo(
     () => (isAlreadyOptimal ? [] : computeModifiedLines(code, optimizedCodeForLevel3)),
@@ -1441,7 +1569,7 @@ const ReviewPage = () => {
               <input
                 type="url"
                 value={problemUrl}
-                onChange={(e) => setProblemUrl(e.target.value)}
+                onChange={(e) => handleProblemUrlChange(e.target.value)}
                 placeholder="e.g. https://leetcode.com/problems/two-sum or https://www.geeksforgeeks.org/problems/two-sum/1"
                 className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200 outline-none focus:border-cyan-500 placeholder:text-slate-600 transition"
               />
@@ -1593,8 +1721,12 @@ const ReviewPage = () => {
               {/* 3. AI Suggestions */}
               <div className="rounded-xl border border-slate-800 bg-slate-950/80 p-3 space-y-3">
                 <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">AI Suggestions</p>
-                {level1Errors.length === 0 && improvements.length === 0 ? (
-                  <p className="text-xs text-emerald-300">✅ No actionable suggestions. Code looks clean.</p>
+                {isAlreadyOptimal ? (
+                  <p className="text-xs text-emerald-300 font-medium flex items-center gap-1.5">
+                    <span>Current solution is optimal.</span>
+                  </p>
+                ) : level1Errors.length === 0 && improvements.length === 0 ? (
+                  <p className="text-xs text-emerald-300">Current solution is optimal.</p>
                 ) : (
                   <>
                     {/* Errors Section */}
@@ -1664,7 +1796,54 @@ const ReviewPage = () => {
                     )}
                   </>
                 )}
+
+                {/* Solve Puzzle Button — Placed immediately after Improvements */}
+                <div className="pt-2.5 border-t border-slate-800/80 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-slate-300">🧩 Unlock Solution Levels</span>
+                    {isPuzzleSolved ? (
+                      <span className="rounded bg-emerald-500/20 px-2 py-0.5 text-[10px] font-semibold text-emerald-300 border border-emerald-500/30">
+                        Unlocked 🎉
+                      </span>
+                    ) : (
+                      <span className="rounded bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold text-amber-300 border border-amber-500/30">
+                        Locked 🔒
+                      </span>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleOpenPuzzleModal}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-purple-500/40 bg-purple-500/20 px-3 py-1.5 text-xs font-semibold text-purple-200 hover:bg-purple-500/30 active:scale-95 transition shadow-sm"
+                  >
+                    <Brain className="h-4 w-4 text-purple-400" />
+                    Solve Puzzle
+                  </button>
+                </div>
               </div>
+
+              {!isPuzzleSolved ? (
+                <div className="rounded-xl border border-slate-800 bg-slate-950/80 p-5 text-center space-y-3">
+                  <div className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-purple-500/10 text-purple-400 border border-purple-500/20">
+                    <Lock className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-200">Solution Levels Locked</h4>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Click <span className="text-purple-300 font-semibold">Solve Puzzle</span> in AI Suggestions above to unlock Level 1, Level 2, and Level 3.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleOpenPuzzleModal}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-purple-500/40 bg-purple-500/20 px-3.5 py-1.5 text-xs font-semibold text-purple-200 hover:bg-purple-500/30 transition shadow-sm"
+                  >
+                    <Brain className="h-3.5 w-3.5 text-purple-400" />
+                    Solve Puzzle
+                  </button>
+                </div>
+              ) : (
+                <>
 
                 {/* LEVEL 1 — BRUTE FORCE */}
                 <div className="rounded-xl border border-rose-500/30 bg-slate-950/90 p-3.5 space-y-2.5">
@@ -1762,7 +1941,7 @@ const ReviewPage = () => {
 
                   {isAlreadyOptimal ? (
                     <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/10 p-3 text-center text-xs font-medium text-emerald-300">
-                      ✅ Current solution is already optimal.
+                      Current solution is optimal.
                     </div>
                   ) : (
                     <div className="rounded-lg border border-slate-800 bg-slate-900/90 overflow-hidden">
@@ -1817,9 +1996,144 @@ const ReviewPage = () => {
                 </div>
               </>
             )}
-          </div>
-        </motion.div>
+          </>
+        )}
       </div>
+    </motion.div>
+  </div>
+
+      {/* Solve Puzzle DSA MCQ Modal */}
+      {isPuzzleModalOpen && activePuzzle && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4">
+          <div className="w-full max-w-lg rounded-2xl border border-purple-500/30 bg-slate-900 p-5 shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                  <Brain className="h-4 w-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-100">DSA Challenge Puzzle</h3>
+                  <p className="text-[11px] text-slate-400">Answer to unlock Level 1, Level 2 &amp; Level 3</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleClosePuzzleModal}
+                className="rounded-lg p-1 text-slate-400 hover:bg-slate-800 hover:text-slate-200 transition"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Question */}
+            <div className="space-y-1.5">
+              <span className="inline-block rounded bg-purple-500/15 px-2 py-0.5 text-[10px] font-bold text-purple-300 border border-purple-500/30 uppercase tracking-wide">
+                Question
+              </span>
+              <p className="text-sm font-medium text-slate-100 leading-relaxed">
+                {activePuzzle.question}
+              </p>
+            </div>
+
+            {/* 4 MCQ Options */}
+            <div className="space-y-2 pt-1">
+              {activePuzzle.options.map((optionText, idx) => {
+                const optionLetter = String.fromCharCode(65 + idx);
+                const isSelected = selectedOptionIndex === idx;
+                const correctIdx = activePuzzle.correctAnswerIndex ?? activePuzzle.correct_index ?? 0;
+                const isCorrect = idx === correctIdx;
+
+                let optionStyle = "border-slate-800 bg-slate-950/60 hover:border-purple-500/50 hover:bg-purple-500/5 text-slate-200";
+                if (puzzleSubmitted) {
+                  if (isCorrect) {
+                    optionStyle = "border-emerald-500/60 bg-emerald-500/15 text-emerald-200 font-medium";
+                  } else if (isSelected && !isCorrect) {
+                    optionStyle = "border-rose-500/60 bg-rose-500/15 text-rose-200";
+                  } else {
+                    optionStyle = "border-slate-800/50 bg-slate-950/30 text-slate-500 opacity-60";
+                  }
+                } else if (isSelected) {
+                  optionStyle = "border-purple-500 bg-purple-500/20 text-purple-100 ring-1 ring-purple-400";
+                }
+
+                return (
+                  <button
+                    key={idx}
+                    type="button"
+                    disabled={puzzleSubmitted}
+                    onClick={() => setSelectedOptionIndex(idx)}
+                    className={`w-full flex items-center gap-3 rounded-xl border p-3 text-left transition text-xs ${optionStyle}`}
+                  >
+                    <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-xs font-bold ${
+                      isSelected
+                        ? 'bg-purple-500 text-white'
+                        : 'bg-slate-800 text-slate-400'
+                    }`}>
+                      {optionLetter}
+                    </span>
+                    <span className="flex-1 leading-snug">{optionText}</span>
+                    {puzzleSubmitted && isCorrect && (
+                      <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+                    )}
+                    {puzzleSubmitted && isSelected && !isCorrect && (
+                      <XCircle className="h-4 w-4 text-rose-400 shrink-0" />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Answer Feedback / Result */}
+            {puzzleSubmitted && (
+              <div className="space-y-2 pt-2 animate-in fade-in duration-200">
+                {selectedOptionIndex === (activePuzzle.correctAnswerIndex ?? activePuzzle.correct_index ?? 0) ? (
+                  <div className="rounded-xl border border-emerald-500/40 bg-emerald-500/15 p-3 text-emerald-200">
+                    <p className="text-sm font-bold flex items-center gap-2">
+                      <span>Well done! 🎉</span>
+                    </p>
+                    <p className="text-xs text-emerald-300/90 mt-1 leading-snug">
+                      {activePuzzle.explanation}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-rose-500/40 bg-rose-500/15 p-3 text-rose-200 space-y-1">
+                    <p className="text-xs font-semibold text-rose-300">
+                      Incorrect. Correct Answer: <span className="font-bold text-emerald-300">Option {String.fromCharCode(65 + (activePuzzle.correctAnswerIndex ?? activePuzzle.correct_index ?? 0))}: {activePuzzle.options[activePuzzle.correctAnswerIndex ?? activePuzzle.correct_index ?? 0]}</span>
+                    </p>
+                    <p className="text-xs text-rose-200/90 leading-snug">
+                      {activePuzzle.explanation}
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Modal Actions */}
+            <div className="pt-3 border-t border-slate-800 flex items-center justify-end gap-2">
+              {!puzzleSubmitted ? (
+                <button
+                  type="button"
+                  disabled={selectedOptionIndex === null}
+                  onClick={handleSubmitPuzzleAnswer}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-purple-500/50 bg-purple-600 px-4 py-2 text-xs font-semibold text-white hover:bg-purple-500 active:scale-95 transition disabled:opacity-50 disabled:cursor-not-allowed shadow-md shadow-purple-950/50"
+                >
+                  Submit Answer
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleClosePuzzleModal}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/50 bg-emerald-600 px-4 py-2 text-xs font-semibold text-white hover:bg-emerald-500 active:scale-95 transition shadow-md shadow-emerald-950/50"
+                >
+                  <Unlock className="h-3.5 w-3.5" />
+                  Unlock Level 1, 2 &amp; 3
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
