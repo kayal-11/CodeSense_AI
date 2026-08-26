@@ -26,14 +26,40 @@ const LANGUAGE_TEMPLATES: Record<SupportedLanguage, LanguageTemplate> = {
   python: {
     label: 'Python',
     fileName: 'example.py',
-    sampleCode: `def two_sum(nums: list[int], target: int) -> list[int]:
-    seen: dict[int, int] = {}
-    for index, value in enumerate(nums):
-        needed = target - value
-        if needed in seen:
-            return [seen[needed], index]
-        seen[value] = index
+    sampleCode: `import sys
+
+def two_sum(nums: list[int], target: int) -> list[int]:
+    """Find indices of two numbers that add up to target."""
+    seen = {}
+    for index, num in enumerate(nums):
+        complement = target - num
+        if complement in seen:
+            return [seen[complement], index]
+        seen[num] = index
     return []
+
+def main():
+    print("=== Two Sum DSA Solver ===")
+    try:
+        raw_input = input("Enter numbers separated by space (e.g. 2 7 11 15): ").strip()
+        if not raw_input:
+            nums = [2, 7, 11, 15]
+            target = 9
+            print(f"Using default sample: nums={nums}, target={target}")
+        else:
+            nums = list(map(int, raw_input.split()))
+            target = int(input("Enter target sum: ").strip())
+        
+        result = two_sum(nums, target)
+        if result:
+            print(f"Result Indices: {result} (values: {nums[result[0]]} + {nums[result[1]]} = {target})")
+        else:
+            print("No two numbers sum up to the target.")
+    except Exception as err:
+        print(f"Input Error: {err}")
+
+if __name__ == "__main__":
+    main()
 `,
   },
   java: {
@@ -41,18 +67,42 @@ const LANGUAGE_TEMPLATES: Record<SupportedLanguage, LanguageTemplate> = {
     fileName: 'example.java',
     sampleCode: `import java.util.HashMap;
 import java.util.Map;
+import java.util.Scanner;
 
 public class Example {
     public static int[] twoSum(int[] nums, int target) {
         Map<Integer, Integer> seen = new HashMap<>();
         for (int i = 0; i < nums.length; i++) {
-            int needed = target - nums[i];
-            if (seen.containsKey(needed)) {
-                return new int[]{seen.get(needed), i};
+            int complement = target - nums[i];
+            if (seen.containsKey(complement)) {
+                return new int[]{seen.get(complement), i};
             }
             seen.put(nums[i], i);
         }
         return new int[]{};
+    }
+
+    public static void main(String[] args) {
+        System.out.println("=== Two Sum DSA Solver ===");
+        Scanner scanner = new Scanner(System.in);
+        System.out.print("Enter size of array: ");
+        if (!scanner.hasNextInt()) return;
+        int n = scanner.nextInt();
+        int[] nums = new int[n];
+        System.out.println("Enter " + n + " elements:");
+        for (int i = 0; i < n; i++) {
+            nums[i] = scanner.nextInt();
+        }
+        System.out.print("Enter target sum: ");
+        int target = scanner.nextInt();
+
+        int[] result = twoSum(nums, target);
+        if (result.length == 2) {
+            System.out.println("Result Indices: [" + result[0] + ", " + result[1] + "]");
+        } else {
+            System.out.println("No matching pair found.");
+        }
+        scanner.close();
     }
 }
 `,
@@ -61,18 +111,38 @@ public class Example {
     label: 'C',
     fileName: 'example.c',
     sampleCode: `#include <stdio.h>
+#include <stdlib.h>
 
-int main(void) {
-    int nums[] = {2, 7, 11, 15};
-    int target = 9;
-    for (int i = 0; i < 4; i++) {
-        for (int j = i + 1; j < 4; j++) {
+void findTwoSum(const int *nums, int size, int target) {
+    for (int i = 0; i < size; i++) {
+        for (int j = i + 1; j < size; j++) {
             if (nums[i] + nums[j] == target) {
-                printf("[%d, %d]\\n", i, j);
-                return 0;
+                printf("Result Indices: [%d, %d] (values: %d + %d = %d)\\n", i, j, nums[i], nums[j], target);
+                return;
             }
         }
     }
+    printf("No matching pair found.\\n");
+}
+
+int main(void) {
+    int n, target;
+    printf("=== Two Sum DSA Solver (C) ===\\n");
+    printf("Enter array size: ");
+    if (scanf("%d", &n) != 1 || n <= 0) {
+        printf("Invalid size.\\n");
+        return 1;
+    }
+    int *nums = (int *)malloc(n * sizeof(int));
+    printf("Enter %d integers:\\n", n);
+    for (int i = 0; i < n; i++) {
+        scanf("%d", &nums[i]);
+    }
+    printf("Enter target sum: ");
+    scanf("%d", &target);
+
+    findTwoSum(nums, n, target);
+    free(nums);
     return 0;
 }
 `,
@@ -81,20 +151,45 @@ int main(void) {
     label: 'C++',
     fileName: 'example.cpp',
     sampleCode: `#include <iostream>
-#include <unordered_map>
 #include <vector>
+#include <unordered_map>
 
 std::vector<int> twoSum(const std::vector<int>& nums, int target) {
     std::unordered_map<int, int> seen;
-    for (int i = 0; i < static_cast<int>(nums.size()); i++) {
-        int needed = target - nums[i];
-        auto it = seen.find(needed);
-        if (it != seen.end()) {
-            return {it->second, i};
+    for (int i = 0; i < static_cast<int>(nums.size()); ++i) {
+        int complement = target - nums[i];
+        if (seen.count(complement)) {
+            return {seen[complement], i};
         }
         seen[nums[i]] = i;
     }
     return {};
+}
+
+int main() {
+    std::cout << "=== Two Sum DSA Solver (C++) ===" << std::endl;
+    std::cout << "Enter number of elements: ";
+    int n;
+    if (!(std::cin >> n) || n <= 0) return 1;
+
+    std::vector<int> nums(n);
+    std::cout << "Enter " << n << " elements:" << std::endl;
+    for (int i = 0; i < n; ++i) {
+        std::cin >> nums[i];
+    }
+
+    std::cout << "Enter target sum: ";
+    int target;
+    std::cin >> target;
+
+    std::vector<int> result = twoSum(nums, target);
+    if (result.size() == 2) {
+        std::cout << "Result Indices: [" + result[0] + ", " + result[1] + "]" << std::endl;
+    } else {
+        std::cout << "No matching pair found." << std::endl;
+    }
+
+    return 0;
 }
 `,
   },
@@ -160,6 +255,54 @@ interface DSAPuzzle {
   correct_index?: number;
   explanation: string;
 }
+
+interface ReviewTab {
+  id: string;
+  title: string;
+  code: string;
+  fileNameHint: string;
+  language: SupportedLanguage;
+  problemUrl: string;
+  activeReviewId: number | null;
+  summary: string;
+  findings: FindingCard[];
+  score: number | null;
+  severityBreakdown: Record<string, number>;
+  analysisHash: string;
+  wasCached: boolean;
+  learningAssistant: ReviewResponse['learning_assistant'];
+  complexityAnalysis: string;
+  refactoredCode: string;
+  isPuzzleSolved: boolean;
+}
+
+const createNewTabObject = (
+  id?: string,
+  lang: SupportedLanguage = DEFAULT_LANGUAGE,
+  initialCode: string = ''
+): ReviewTab => {
+  const template = templateForLanguage(lang);
+  const tabId = id || `tab_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`;
+  return {
+    id: tabId,
+    title: template.fileName,
+    code: initialCode,
+    fileNameHint: template.fileName,
+    language: lang,
+    problemUrl: '',
+    activeReviewId: null,
+    summary: 'Review ready to run.',
+    findings: [],
+    score: null,
+    severityBreakdown: { critical: 0, high: 0, medium: 0, low: 0 },
+    analysisHash: '',
+    wasCached: false,
+    learningAssistant: {},
+    complexityAnalysis: '',
+    refactoredCode: '',
+    isPuzzleSolved: false,
+  };
+};
 
 interface ReviewResponse {
   id?: number;
@@ -598,6 +741,12 @@ const ReviewPage = () => {
   const [detectionConfidence, setDetectionConfidence] = useState<'high' | 'medium' | 'low'>('high');
   const [detectionReason, setDetectionReason] = useState('Initialized with language template.');
   const [autoDetectEnabled, setAutoDetectEnabled] = useState(true);
+
+  // Multi-tab State System
+  const [tabs, setTabs] = useState<ReviewTab[]>(() => [
+    createNewTabObject('tab_1', DEFAULT_LANGUAGE, LANGUAGE_TEMPLATES[DEFAULT_LANGUAGE].sampleCode)
+  ]);
+  const [activeTabId, setActiveTabId] = useState<string>('tab_1');
   const [summary, setSummary] = useState('Review ready to run.');
   const [findings, setFindings] = useState<FindingCard[]>([]);
   const [score, setScore] = useState<number | null>(null);
@@ -744,31 +893,136 @@ const ReviewPage = () => {
   }, []);
 
   const handleNewSession = useCallback(() => {
-    setActiveReviewId(null);
+    // Open a new tab immediately beside the current active tab
+    const ext = templateForLanguage(language).fileName;
+    const newTabId = `tab_${Date.now()}`;
+    const newTab = createNewTabObject(newTabId, language, ''); // Starts completely empty
+
+    setTabs((prevTabs) => {
+      const activeIdx = prevTabs.findIndex((t) => t.id === activeTabId);
+      const nextTabs = [...prevTabs];
+      if (activeIdx !== -1) {
+        nextTabs.splice(activeIdx + 1, 0, newTab);
+      } else {
+        nextTabs.push(newTab);
+      }
+      return nextTabs;
+    });
+
+    setActiveTabId(newTabId);
+    setCode('');
+    setFileNameHint(ext);
     setProblemUrl('');
-    try {
-      sessionStorage.removeItem('codesense_problem_url');
-    } catch {}
-    const defaultTemplate = templateForLanguage(DEFAULT_LANGUAGE);
-    setCode(defaultTemplate.sampleCode);
-    setFileNameHint(defaultTemplate.fileName);
-    setLanguage(DEFAULT_LANGUAGE);
-    setDetectedLanguage(defaultTemplate.label);
-    setDetectionConfidence('high');
-    setDetectionReason('Initialized with language template.');
-    setAutoDetectEnabled(true);
+    setActiveReviewId(null);
     clearAnalysisStateAndHighlights();
     lastAnalyzedCodeRef.current = '';
     setError(null);
     setSaveSuccess(false);
 
     try {
-      localStorage.removeItem('codesense_saved_editor');
-      if (typeof window !== 'undefined' && window.history?.replaceState) {
-        window.history.replaceState({}, document.title, window.location.pathname);
-      }
+      sessionStorage.removeItem('codesense_problem_url');
     } catch {}
-  }, [clearAnalysisStateAndHighlights]);
+  }, [activeTabId, language, clearAnalysisStateAndHighlights]);
+
+  const handleSwitchTab = useCallback(
+    (targetTabId: string) => {
+      if (targetTabId === activeTabId) return;
+
+      // Save active tab state
+      setTabs((prevTabs) =>
+        prevTabs.map((t) => {
+          if (t.id === activeTabId) {
+            return {
+              ...t,
+              code,
+              fileNameHint,
+              language,
+              problemUrl,
+              activeReviewId,
+              summary,
+              findings,
+              score,
+              severityBreakdown,
+              analysisHash,
+              wasCached,
+              learningAssistant,
+              complexityAnalysis,
+              refactoredCode,
+              isPuzzleSolved,
+            };
+          }
+          return t;
+        })
+      );
+
+      // Restore target tab state
+      const targetTab = tabs.find((t) => t.id === targetTabId);
+      if (targetTab) {
+        setActiveTabId(targetTabId);
+        setCode(targetTab.code);
+        setFileNameHint(targetTab.fileNameHint);
+        setLanguage(targetTab.language);
+        setProblemUrl(targetTab.problemUrl);
+        setActiveReviewId(targetTab.activeReviewId);
+        setSummary(targetTab.summary);
+        setFindings(targetTab.findings);
+        setScore(targetTab.score);
+        setSeverityBreakdown(targetTab.severityBreakdown);
+        setAnalysisHash(targetTab.analysisHash);
+        setWasCached(targetTab.wasCached);
+        setLearningAssistant(targetTab.learningAssistant);
+        setComplexityAnalysis(targetTab.complexityAnalysis);
+        setRefactoredCode(targetTab.refactoredCode);
+        setIsPuzzleSolved(targetTab.isPuzzleSolved);
+      }
+    },
+    [
+      activeTabId, code, fileNameHint, language, problemUrl, activeReviewId,
+      summary, findings, score, severityBreakdown, analysisHash, wasCached,
+      learningAssistant, complexityAnalysis, refactoredCode, isPuzzleSolved, tabs
+    ]
+  );
+
+  const handleCloseTab = useCallback(
+    (tabIdToClose: string, e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (tabs.length === 1) {
+        setCode('');
+        setProblemUrl('');
+        clearAnalysisStateAndHighlights();
+        setTabs([createNewTabObject(tabs[0].id, language, '')]);
+        return;
+      }
+
+      const closeIdx = tabs.findIndex((t) => t.id === tabIdToClose);
+      const nextTabs = tabs.filter((t) => t.id !== tabIdToClose);
+      setTabs(nextTabs);
+
+      if (activeTabId === tabIdToClose) {
+        const fallbackIdx = Math.max(0, closeIdx - 1);
+        const nextTab = nextTabs[fallbackIdx];
+        if (nextTab) {
+          setActiveTabId(nextTab.id);
+          setCode(nextTab.code);
+          setFileNameHint(nextTab.fileNameHint);
+          setLanguage(nextTab.language);
+          setProblemUrl(nextTab.problemUrl);
+          setActiveReviewId(nextTab.activeReviewId);
+          setSummary(nextTab.summary);
+          setFindings(nextTab.findings);
+          setScore(nextTab.score);
+          setSeverityBreakdown(nextTab.severityBreakdown);
+          setAnalysisHash(nextTab.analysisHash);
+          setWasCached(nextTab.wasCached);
+          setLearningAssistant(nextTab.learningAssistant);
+          setComplexityAnalysis(nextTab.complexityAnalysis);
+          setRefactoredCode(nextTab.refactoredCode);
+          setIsPuzzleSolved(nextTab.isPuzzleSolved);
+        }
+      }
+    },
+    [tabs, activeTabId, language, clearAnalysisStateAndHighlights]
+  );
 
   const handleCodeChange = useCallback((newCode: string) => {
     setCode(newCode);
@@ -798,14 +1052,6 @@ const ReviewPage = () => {
   const supportedLanguages = useMemo(() => new Set(languageOptions.map((option) => option.value)), [languageOptions]);
 
   useEffect(() => {
-    if (problemUrl.trim()) {
-      const detection = detectLanguage(code, fileNameHint);
-      setDetectedLanguage(detection.detectedLanguage);
-      setDetectionConfidence('high');
-      setDetectionReason('Problem Link detected — analyzing solution logic against the linked problem.');
-      return;
-    }
-
     const detection = detectLanguage(code, fileNameHint);
 
     if (!autoDetectEnabled) {
@@ -824,7 +1070,7 @@ const ReviewPage = () => {
     if (isSupportedLanguage(autoLanguage) && autoLanguage !== language) {
       setLanguage(autoLanguage);
     }
-  }, [autoDetectEnabled, code, fileNameHint, language, problemUrl, supportedLanguages]);
+  }, [autoDetectEnabled, code, fileNameHint, language, supportedLanguages]);
 
   useEffect(() => {
     const onResize = () => setIsWideLayout(window.innerWidth >= 1280);
@@ -1631,7 +1877,45 @@ const ReviewPage = () => {
                 Export
               </button>
             </div>
-            <p className="text-[11px] text-slate-400">Extension is checked first, then syntax is validated for confidence.</p>
+          </div>
+
+          {/* VS Code Style Multi-Tab System — Positioned directly below action buttons and above code editor */}
+          <div className="mb-3 flex items-center gap-2 overflow-x-auto pb-1.5 border-b border-slate-800 scrollbar-thin shrink-0 min-w-0">
+            {tabs.map((tab) => {
+              const isActive = tab.id === activeTabId;
+              const titleText = tab.id === activeTabId ? (fileNameHint || tab.title) : (tab.fileNameHint || tab.title);
+              return (
+                <div
+                  key={tab.id}
+                  onClick={() => handleSwitchTab(tab.id)}
+                  className={`group flex items-center gap-2.5 rounded-xl px-3.5 py-1.5 text-xs cursor-pointer border transition-all duration-150 select-none shrink-0 ${
+                    isActive
+                      ? 'border-cyan-500 bg-cyan-500/20 text-cyan-200 ring-1 ring-cyan-500/40 shadow-md font-semibold font-mono'
+                      : 'border-slate-800 bg-slate-950/80 text-slate-400 hover:border-slate-700 hover:text-slate-200 font-mono'
+                  }`}
+                >
+                  <span className="truncate max-w-[150px] font-mono text-xs tracking-tight">
+                    {titleText || 'example.py'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={(e) => handleCloseTab(tab.id, e)}
+                    className="rounded p-0.5 opacity-60 hover:opacity-100 hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition"
+                    title="Close tab"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              );
+            })}
+            <button
+              type="button"
+              onClick={handleNewSession}
+              className="inline-flex items-center justify-center rounded-xl border border-slate-800 bg-slate-950 px-2.5 py-1.5 text-xs font-bold text-slate-300 hover:border-cyan-500/50 hover:text-cyan-300 hover:bg-cyan-500/15 transition shrink-0"
+              title="Open new empty tab (+)"
+            >
+              <Plus className="h-4 w-4 text-cyan-400" />
+            </button>
           </div>
           <div className="flex-1 min-h-[300px] overflow-hidden rounded-xl border border-slate-800">
             <Editor
