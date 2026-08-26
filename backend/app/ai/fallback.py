@@ -65,8 +65,16 @@ class FallbackProvider(BaseAIProvider):
         static_findings = static_analysis.get("issues", []) if isinstance(static_analysis, dict) else []
         provider_name = (settings.llm_provider or 'groq').capitalize()
 
+        has_problem_url = bool(problem_info)
+
         # Start with static analysis findings
         for finding in static_findings:
+            msg = str(finding.get("message", "")).lower()
+            if has_problem_url and any(kw in msg for kw in [
+                'main method', 'missing main', 'undefined reference to main', 'driver', 'input/output',
+                'scanner', 'stdin', 'initialization', 'used without importing', 'missing import'
+            ]):
+                continue
             item = {
                 "type": finding.get("type", "Static analysis warning"),
                 "severity": finding.get("severity", "medium"),

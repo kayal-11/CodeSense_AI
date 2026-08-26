@@ -113,6 +113,10 @@ def _write_temp_source(temp_dir: str, language: str, code: str, has_problem_url:
     if has_problem_url:
         if language == 'java':
             mock_prefix = (
+                "import java.util.*;\n"
+                "import java.util.stream.*;\n"
+                "import java.io.*;\n"
+                "import java.math.*;\n"
                 "class ListNode { int val; ListNode next; ListNode() {} ListNode(int val) { this.val = val; } ListNode(int val, ListNode next) { this.val = val; this.next = next; } }\n"
                 "class TreeNode { int val; TreeNode left; TreeNode right; TreeNode() {} TreeNode(int val) { this.val = val; } TreeNode(int val, TreeNode left, TreeNode right) { this.val = val; this.left = left; this.right = right; } }\n"
                 "class Node { int val; Node left; Node right; Node next; Node random; Node parent; java.util.List<Node> neighbors; Node() {} Node(int _val) { val = _val; } }\n"
@@ -122,7 +126,7 @@ def _write_temp_source(temp_dir: str, language: str, code: str, has_problem_url:
             prepended_lines = mock_prefix.count('\n')
         elif language in {'cpp', 'c++'}:
             mock_prefix = (
-                "#include <iostream>\n#include <vector>\n#include <string>\n#include <unordered_map>\n#include <unordered_set>\n#include <map>\n#include <set>\n#include <queue>\n#include <stack>\n#include <algorithm>\n#include <cmath>\n"
+                "#include <iostream>\n#include <vector>\n#include <string>\n#include <unordered_map>\n#include <unordered_set>\n#include <map>\n#include <set>\n#include <queue>\n#include <stack>\n#include <algorithm>\n#include <cmath>\n#include <climits>\n#include <numeric>\n#include <utility>\nusing namespace std;\n"
                 "struct ListNode { int val; ListNode *next; ListNode() : val(0), next(nullptr) {} ListNode(int x) : val(x), next(nullptr) {} ListNode(int x, ListNode *next) : val(x), next(next) {} };\n"
                 "struct TreeNode { int val; TreeNode *left; TreeNode *right; TreeNode() : val(0), left(nullptr), right(nullptr) {} TreeNode(int x) : val(x), left(nullptr), right(nullptr) {} TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {} };\n"
                 "struct Node { int val; std::vector<Node*> neighbors; Node* left; Node* right; Node* next; Node* random; Node() : val(0), left(nullptr), right(nullptr), next(nullptr), random(nullptr) {} Node(int _val) : val(_val), left(nullptr), right(nullptr), next(nullptr), random(nullptr) {} };\n"
@@ -130,7 +134,7 @@ def _write_temp_source(temp_dir: str, language: str, code: str, has_problem_url:
             prepended_lines = mock_prefix.count('\n')
         elif language == 'c':
             mock_prefix = (
-                "#include <stdio.h>\n#include <stdlib.h>\n#include <stdbool.h>\n"
+                "#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <stdbool.h>\n#include <math.h>\n#include <limits.h>\n"
                 "struct ListNode { int val; struct ListNode *next; };\n"
                 "struct TreeNode { int val; struct TreeNode *left; struct TreeNode *right; };\n"
                 "struct Node { int val; struct Node *left; struct Node *right; struct Node *next; struct Node *random; };\n"
@@ -309,7 +313,9 @@ def _collect_compiler_diagnostics(code: str, language: str, has_problem_url: boo
         for line, col, msg in diagnostics:
             actual_line = max(1, line - prepended_lines)
             lowered = msg.lower()
-            if has_problem_url and any(t in lowered for t in ['listnode', 'treenode', 'node', 'point', 'pair', 'quadtree', 'solution', 'main method', 'missing main', 'undefined reference to main']):
+            if has_problem_url and any(t in lowered for t in [
+                'main method', 'missing main', 'undefined reference to main', 'driver entrypoint', 'no main class'
+            ]):
                 continue
             _compiler_error_issue(issues, normalized, actual_line, col, msg)
 
@@ -317,8 +323,9 @@ def _collect_compiler_diagnostics(code: str, language: str, has_problem_url: boo
 
 
 class PythonErrorDetector(ast.NodeVisitor):
-    def __init__(self, code: str):
+    def __init__(self, code: str, has_problem_url: bool = False):
         self.code = code
+        self.has_problem_url = has_problem_url
         self.issues: list[dict[str, Any]] = []
         self.scopes: list[set[str]] = [set()]
         self.imports: set[str] = set()
@@ -488,7 +495,7 @@ class PythonErrorDetector(ast.NodeVisitor):
 
     def visit_Name(self, node: ast.Name) -> None:
         if isinstance(node.ctx, ast.Load):
-            if node.id in self.std_modules and node.id not in self.imports and node.id not in self.scopes[0]:
+            if not self.has_problem_url and node.id in self.std_modules and node.id not in self.imports and node.id not in self.scopes[0]:
                 _append_issue(
                     self.issues,
                     'Missing Import',
@@ -502,6 +509,8 @@ class PythonErrorDetector(ast.NodeVisitor):
                     end_col=getattr(node, 'col_offset', 0) + len(node.id) + 1,
                 )
             elif not self._is_defined(node.id):
+                if self.has_problem_url and (node.id in self.builtins or node.id in self.std_modules):
+                    return
                 _append_issue(
                     self.issues,
                     'Undefined Variable',
@@ -792,7 +801,7 @@ def analyze_code(code: str, language: str, problem_info: dict[str, Any] | None =
     if normalized_language == 'python':
         try:
             tree = ast.parse(code)
-            detector = PythonErrorDetector(code)
+            detector = PythonErrorDetector(code, has_problem_url=has_problem_url)
             detector.visit(tree)
             issues.extend(detector.issues)
         except SyntaxError as exc:
@@ -974,19 +983,20 @@ def analyze_code(code: str, language: str, problem_info: dict[str, Any] | None =
                 is_error=False,
             )
 
-        java_util_classes = ['List', 'ArrayList', 'Map', 'HashMap', 'Set', 'HashSet', 'Scanner']
-        for cls_name in java_util_classes:
-            if re.search(r'\b' + cls_name + r'\b', code) and 'import java.util' not in code:
-                _append_issue(
-                    issues,
-                    'Missing Import',
-                    'high',
-                    f"'{cls_name}' is used without importing java.util.{cls_name}.",
-                    _line_number(code, r'\b' + cls_name + r'\b'),
-                    why_it_matters=f"Using '{cls_name}' without import causes compilation error.",
-                    suggested_fix=f"Add 'import java.util.{cls_name};' or 'import java.util.*;' at the top.",
-                    is_error=True,
-                )
+        if not has_problem_url:
+            java_util_classes = ['List', 'ArrayList', 'Map', 'HashMap', 'Set', 'HashSet', 'Scanner']
+            for cls_name in java_util_classes:
+                if re.search(r'\b' + cls_name + r'\b', code) and 'import java.util' not in code:
+                    _append_issue(
+                        issues,
+                        'Missing Import',
+                        'high',
+                        f"'{cls_name}' is used without importing java.util.{cls_name}.",
+                        _line_number(code, r'\b' + cls_name + r'\b'),
+                        why_it_matters=f"Using '{cls_name}' without import causes compilation error.",
+                        suggested_fix=f"Add 'import java.util.{cls_name};' or 'import java.util.*;' at the top.",
+                        is_error=True,
+                    )
 
         lines_local = code.splitlines()
         nested_loop_found = False
@@ -1020,7 +1030,7 @@ def analyze_code(code: str, language: str, problem_info: dict[str, Any] | None =
             )
 
     elif normalized_language in {'c', 'cpp', 'csharp', 'go', 'rust'}:
-        if normalized_language in {'c', 'cpp'}:
+        if not has_problem_url and normalized_language in {'c', 'cpp'}:
             if ('printf(' in code or 'scanf(' in code) and '#include <stdio.h>' not in code and '#include <cstdio>' not in code:
                 _append_issue(
                     issues,

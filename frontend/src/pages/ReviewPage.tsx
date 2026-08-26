@@ -517,7 +517,7 @@ const formatLineRangeLabel = (lineNumber: number | null, endLineNumber?: number)
 const suggestionKey = (finding: FindingCard): string =>
   `${finding.severity}|${finding.lineNumber ?? 0}|${finding.endLineNumber ?? 0}|${finding.startCol ?? 0}|${finding.endCol ?? 0}|${finding.title}|${finding.description}`.toLowerCase();
 
-const isActionableSuggestion = (finding: FindingCard): boolean => {
+const isActionableSuggestion = (finding: FindingCard, isProblemUrlActive = false): boolean => {
   const combined = `${finding.title} ${finding.description} ${finding.suggestedFix}`.trim();
   if (!combined || combined.length < 4) return false;
 
@@ -533,6 +533,17 @@ const isActionableSuggestion = (finding: FindingCard): boolean => {
     'temporarily limited',
   ];
   if (blockedPhrases.some((phrase) => lower.includes(phrase))) return false;
+
+  if (isProblemUrlActive) {
+    const platformNoiseKeywords = [
+      'used without importing',
+      'missing import java.util',
+      'missing main method',
+      'missing driver',
+      'missing package declaration',
+    ];
+    if (platformNoiseKeywords.some((kw) => lower.includes(kw))) return false;
+  }
 
   if (
     finding.category.toLowerCase() === 'ai suggestion' &&
@@ -673,6 +684,14 @@ const ReviewPage = () => {
   const supportedLanguages = useMemo(() => new Set(languageOptions.map((option) => option.value)), [languageOptions]);
 
   useEffect(() => {
+    if (problemUrl.trim()) {
+      const detection = detectLanguage(code, fileNameHint);
+      setDetectedLanguage(detection.detectedLanguage);
+      setDetectionConfidence('high');
+      setDetectionReason('Problem Link detected — analyzing solution logic against the linked problem.');
+      return;
+    }
+
     const detection = detectLanguage(code, fileNameHint);
 
     if (!autoDetectEnabled) {
@@ -691,7 +710,7 @@ const ReviewPage = () => {
     if (isSupportedLanguage(autoLanguage) && autoLanguage !== language) {
       setLanguage(autoLanguage);
     }
-  }, [autoDetectEnabled, code, fileNameHint, language, supportedLanguages]);
+  }, [autoDetectEnabled, code, fileNameHint, language, problemUrl, supportedLanguages]);
 
   useEffect(() => {
     const onResize = () => setIsWideLayout(window.innerWidth >= 1280);
@@ -931,10 +950,12 @@ const ReviewPage = () => {
 
   const realTimeSyntaxErrors = useMemo(() => detectSyntaxErrors(code, language), [code, language]);
 
+  const isProblemUrlActive = Boolean(problemUrl.trim());
+
   const { level1Errors, improvements } = useMemo(() => {
     const deduped = new Map<string, FindingCard>();
     findings.forEach((finding) => {
-      if (!isActionableSuggestion(finding)) return;
+      if (!isActionableSuggestion(finding, isProblemUrlActive)) return;
       const key = suggestionKey(finding);
       if (!deduped.has(key)) deduped.set(key, finding);
     });
@@ -943,19 +964,21 @@ const ReviewPage = () => {
     const rawErrors = items.filter((f) => isErrorFinding(f));
     const nonErrors = items.filter((f) => !isErrorFinding(f));
 
-    // Convert real-time syntax errors to finding cards
-    const realTimeFindingCards: FindingCard[] = realTimeSyntaxErrors.map((rtErr, index) => ({
-      id: `realtime-syntax-err-${index}`,
-      category: 'Syntax Error',
-      severity: 'critical',
-      title: rtErr.title,
-      lineNumber: rtErr.lineNumber,
-      description: rtErr.description,
-      whyItMatters: 'Syntax errors break execution or compilation and prevent code from running.',
-      suggestedFix: `Fix the syntax error at line ${rtErr.lineNumber}: ${rtErr.title}`,
-      isError: true,
-      level: 'Level 1',
-    }));
+    // Convert real-time syntax errors to finding cards ONLY when not in Problem Link Mode
+    const realTimeFindingCards: FindingCard[] = isProblemUrlActive
+      ? []
+      : realTimeSyntaxErrors.map((rtErr, index) => ({
+          id: `realtime-syntax-err-${index}`,
+          category: 'Syntax Error',
+          severity: 'critical',
+          title: rtErr.title,
+          lineNumber: rtErr.lineNumber,
+          description: rtErr.description,
+          whyItMatters: 'Syntax errors break execution or compilation and prevent code from running.',
+          suggestedFix: `Fix the syntax error at line ${rtErr.lineNumber}: ${rtErr.title}`,
+          isError: true,
+          level: 'Level 1',
+        }));
 
     // Combine real-time syntax errors with analysis errors
     const allErrorsToProcess = [...realTimeFindingCards, ...rawErrors];
@@ -999,7 +1022,7 @@ const ReviewPage = () => {
       level1Errors: errors,
       improvements: nonErrors,
     };
-  }, [findings, codeLines, realTimeSyntaxErrors]);
+  }, [findings, codeLines, realTimeSyntaxErrors, isProblemUrlActive]);
 
   const optimizedCodeForLevel3 = useMemo(() => {
     const raw =
