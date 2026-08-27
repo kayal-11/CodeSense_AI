@@ -178,6 +178,67 @@ def test_user_exact_example_narraylist_mapeed():
     assert 1 not in issue_lines, f"Line 1 (class Solution) must NOT be reported as error location! Got lines: {issue_lines}"
     print("PASSED!\n")
 
+def test_python_multiple_independent_errors():
+    code = "class Solution:\n" \
+           "    def twoSum(self, nums: List[int], target: int) -> List[int]:\n" \
+           "        seen = {}\n" \
+           "        for i, num in enumerate(numss):\n" \
+           "            comp = target - num\n" \
+           "            if comp in seenn:\n" \
+           "                return [seen[comp], i]\n" \
+           "        return []"
+    problem_info = {
+        "platform": "LeetCode",
+        "title": "Two Sum"
+    }
+
+    res = analyze_code(code, "python", problem_info=problem_info)
+    issues = dedupe_and_sort_issues([normalize_issue(i) for i in res["issues"]], source_code=code, has_problem_url=True)
+
+    print("Test 7 - Multiple Independent Python Errors (numss on Line 4, seenn on Line 6):")
+    print("Issues count:", len(issues))
+    for iss in issues:
+        print("Issue:", iss)
+
+    issue_lines = {iss["line"] for iss in issues}
+    assert 4 in issue_lines, f"Expected error on Line 4 (numss), got lines: {issue_lines}"
+    assert 6 in issue_lines, f"Expected error on Line 6 (seenn), got lines: {issue_lines}"
+    print("PASSED!\n")
+
+def test_strict_error_schema_validation():
+    code = "class Solution {\n" \
+           "    public int[] twoSum(int[] nums, int target) {\n" \
+           "\n" \
+           "        List<Integer> list = new narrayList<>();\n" \
+           "        Map<Integer, Integer> map = new HashMap<>();\n" \
+           "        for (int i = 0; i < nums.length; i++) {\n" \
+           "            if (mapeed.containsKey(target - nums[i])) {\n" \
+           "                return new int[]{map.get(target - nums[i]), i};\n" \
+           "            }\n" \
+           "        }\n" \
+           "        return new int[]{};\n" \
+           "    }\n" \
+           "}"
+    problem_info = {
+        "platform": "LeetCode",
+        "title": "Two Sum"
+    }
+
+    res = analyze_code(code, "java", problem_info=problem_info)
+    issues = dedupe_and_sort_issues([normalize_issue(i) for i in res["issues"]], source_code=code, has_problem_url=True)
+
+    required_keys = {"type", "severity", "message", "line", "why_it_matters", "suggested_fix", "is_error", "level"}
+
+    print("Test 8 - Strict Schema Keys Validation:")
+    for idx, iss in enumerate(issues):
+        missing = required_keys - set(iss.keys())
+        assert not missing, f"Issue {idx} missing required keys: {missing}"
+        assert isinstance(iss["line"], int) and iss["line"] > 0, f"Line must be positive int, got {iss['line']}"
+        assert isinstance(iss["is_error"], bool), f"is_error must be bool"
+        assert iss["level"] == "Level 1", f"level must be Level 1"
+        print(f"Issue {idx + 1} strictly validated with keys: {sorted(iss.keys())}")
+    print("PASSED!\n")
+
 if __name__ == "__main__":
     test_valid_leetcode_java()
     test_leetcode_java_typo()
@@ -185,4 +246,6 @@ if __name__ == "__main__":
     test_leetcode_python_missing_colon()
     test_valid_leetcode_cpp()
     test_user_exact_example_narraylist_mapeed()
+    test_python_multiple_independent_errors()
+    test_strict_error_schema_validation()
     print("ALL TESTS PASSED SUCCESSFULLY!")

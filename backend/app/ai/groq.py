@@ -217,10 +217,12 @@ class GroqProvider(BaseAIProvider):
             "You are CodeSense AI, an expert code reviewer and competition judge. "
             "Analyze the provided source code and optional problem context.\n\n"
             f"{mode_instruction}\n"
-            "CRITICAL LINE NUMBER ACCURACY RULE:\n"
-            "Count line numbers starting from line 1 of the user's submitted source code in ```code```.\n"
-            "Every object in `issues` MUST specify the exact 1-based `line` number where the error actually occurs in ```code``` (e.g. line 4 for ArrayLst, line 12 for condition error).\n"
-            "NEVER default to line 1 unless the error actually occurs on line 1.\n\n"
+            "CRITICAL ALL-ERRORS DETECTION RULE:\n"
+            "1. SCAN THE ENTIRE SOURCE CODE: Analyze the whole code snippet from line 1 to the end. Do NOT stop after finding the first error!\n"
+            "2. REPORT ALL INDEPENDENT GENUINE ERRORS: If the user's code contains multiple independent errors on different lines (e.g. line 4 `narrayList` and line 7 `mapeed`), you MUST return EVERY single independent error in the `issues` array.\n"
+            "3. EXACT LINE NUMBERS: Map every issue to the exact 1-based line number shown on the left of the line-numbered code snippet (e.g. line 4 for `narrayList`, line 7 for `mapeed`).\n"
+            "4. NEVER DEFAULT TO LINE 1: Do NOT assign line 1 unless the error actually occurs on line 1. Do NOT use `class Solution` header or method signature lines as fallback error locations.\n"
+            "5. NO CASCADING FALSE ERRORS: Ignore secondary cascading parser errors caused by a root syntax error. Report only genuine root errors.\n\n"
             "Respond ONLY in valid JSON adhering strictly to this schema:\n"
             "{\n"
             '  "score_out_of_ten": "9.2/10", // String like "9.2/10" or "10/10"\n'
@@ -237,14 +239,24 @@ class GroqProvider(BaseAIProvider):
             '  "is_already_optimal": false, // boolean: true if current code is optimal\n'
             '  "issues": [\n'
             '    {\n'
-            '      "type": "Syntax Error",\n'
+            '      "type": "Syntax / Type Error",\n'
             '      "severity": "critical",\n'
-            '      "message": "Missing colon at end of statement",\n'
-            '      "line": 7,\n'
-            '      "why_it_matters": "Missing colon breaks statement syntax.",\n'
-            '      "suggested_fix": "Add colon to statement.",\n'
+            '      "message": "narrayList<>() is an invalid identifier. Expected ArrayList<>.",\n'
+            '      "line": 4,\n'
+            '      "why_it_matters": "Spelling errors in class identifiers cause symbol resolution errors.",\n'
+            '      "suggested_fix": "Change narrayList to ArrayList.",\n'
             '      "is_error": true,\n'
-            '      "level": "Error"\n'
+            '      "level": "Level 1"\n'
+            '    },\n'
+            '    {\n'
+            '      "type": "Undefined Variable / Typo",\n'
+            '      "severity": "critical",\n'
+            '      "message": "mapeed is an undefined or misspelled variable. Expected map.",\n'
+            '      "line": 7,\n'
+            '      "why_it_matters": "Accessing misspelled variable names causes symbol resolution errors.",\n'
+            '      "suggested_fix": "Change mapeed to map.",\n'
+            '      "is_error": true,\n'
+            '      "level": "Level 1"\n'
             '    }\n'
             '  ],\n'
             '  "optimized_code": "Return ONLY complete compilable source code in target language.",\n'
@@ -273,7 +285,7 @@ class GroqProvider(BaseAIProvider):
             '  "level_3_solution_summary": "Linear time complexity solution using hash map for O(1) lookups."\n'
             "}\n"
             "CRITICAL RULES:\n"
-            "0. ROOT-CAUSE ERROR ANALYSIS: Evaluate full source code context to identify exact root-cause line.\n"
+            "0. SCAN FULL CODE & REPORT ALL ERRORS: Inspect every line of code to detect ALL genuine independent errors across the entire submission.\n"
             "1. Both level_1_brute_force and level_2_better_approach MUST contain valid runnable code snippets formatted strictly in the specified programming language.\n"
             "2. If problem context is provided, tailor all explanations, algorithms, and code to the exact problem requirements.\n"
             "3. If code is already optimal, set is_already_optimal=true and optimized_code=\"\".\n"
@@ -463,6 +475,27 @@ class GroqProvider(BaseAIProvider):
                                 "explanation": str(raw_dsa_puzzle.get("explanation", "Review algorithmic complexity to pick optimal approach.")).strip()
                             }
 
+                    raw_issues_list = result.get("issues", []) if isinstance(result.get("issues", []), list) else []
+                    sanitized_issues: list[dict[str, Any]] = []
+                    for raw_item in raw_issues_list:
+                        if not isinstance(raw_item, dict):
+                            continue
+                        line_val = self._to_int(raw_item.get("line", 1), 1)
+                        msg = str(raw_item.get("message", "")).strip()
+                        why_matters = str(raw_item.get("why_it_matters", msg)).strip()
+                        sug_fix = str(raw_item.get("suggested_fix", "")).strip()
+                        if msg:
+                            sanitized_issues.append({
+                                "type": str(raw_item.get("type", "Syntax Error")).strip(),
+                                "severity": str(raw_item.get("severity", "critical")).strip().lower(),
+                                "message": msg,
+                                "line": max(1, line_val),
+                                "why_it_matters": why_matters,
+                                "suggested_fix": sug_fix,
+                                "is_error": True,
+                                "level": "Level 1",
+                            })
+
                     normalized = {
                         "summary": summary_text,
                         "overall_score": score_100,
@@ -486,7 +519,7 @@ class GroqProvider(BaseAIProvider):
                         "suggested_fixes": top_fixes_raw[:3],
                         "documentation_suggestions": [],
                         "unit_test_suggestions": [],
-                        "issues": result.get("issues", []) if isinstance(result.get("issues", []), list) else [],
+                        "issues": sanitized_issues,
                     }
 
                     return normalized
