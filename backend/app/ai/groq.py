@@ -205,7 +205,6 @@ class GroqProvider(BaseAIProvider):
             "   - `ArrayLis` misspelled -> User code error -> MUST REPORT AS SYNTAX / TYPE ERROR.\n"
             "4. IF THE USER'S LOGIC IS CORRECT AND CONTAINS NO TYPOS/ERRORS:\n"
             "   - Clearly state that the solution logic is correct. DO NOT manufacture warnings or errors.\n"
-            "   - Set issues to [] and bugs to []. Do NOT suggest adding missing imports or main().\n"
             if has_problem_url
             else "NO URL PROVIDED MODE:\n"
             "Treat the code as standalone source code.\n"
@@ -217,46 +216,30 @@ class GroqProvider(BaseAIProvider):
             "You are CodeSense AI, an expert code reviewer and competition judge. "
             "Analyze the provided source code and optional problem context.\n\n"
             f"{mode_instruction}\n"
-            "CRITICAL ALL-ERRORS DETECTION RULE:\n"
-            "1. SCAN THE ENTIRE SOURCE CODE: Analyze the whole code snippet from line 1 to the end. Do NOT stop after finding the first error!\n"
-            "2. REPORT ALL INDEPENDENT GENUINE ERRORS: If the user's code contains multiple independent errors on different lines (e.g. line 4 `narrayList` and line 7 `mapeed`), you MUST return EVERY single independent error in the `issues` array.\n"
-            "3. EXACT LINE NUMBERS: Map every issue to the exact 1-based line number shown on the left of the line-numbered code snippet (e.g. line 4 for `narrayList`, line 7 for `mapeed`).\n"
-            "4. NEVER DEFAULT TO LINE 1: Do NOT assign line 1 unless the error actually occurs on line 1. Do NOT use `class Solution` header or method signature lines as fallback error locations.\n"
-            "5. NO CASCADING FALSE ERRORS: Ignore secondary cascading parser errors caused by a root syntax error. Report only genuine root errors.\n\n"
             "Respond ONLY in valid JSON adhering strictly to this schema:\n"
             "{\n"
-            '  "score_out_of_ten": "9.2/10", // String like "9.2/10" or "10/10"\n'
+            '  "score_out_of_ten": "9.2/10", // String like "9.2/10" or "8/10"\n'
             '  "overall_score": 92, // Integer 1 to 100\n'
             '  "correctness": "Correct", // 1 to 3 words\n'
             '  "complexity": "O(n) | O(n)", // e.g. "O(n) | O(n)" or "O(1) | O(1)"\n'
             '  "security": "No issues", // 1 to 4 words\n'
             '  "top_fixes": [\n'
-            '    "Validate input boundary constraints",\n'
-            '    "Optimize memory allocation",\n'
+            '    "Import `Map` & `HashMap`",\n'
+            '    "Validate input length",\n'
             '    "Improve exception handling"\n'
             '  ],\n'
             '  "verdict": "Production-ready with minor improvements.", // 1 concise sentence\n'
             '  "is_already_optimal": false, // boolean: true if current code is optimal\n'
             '  "issues": [\n'
             '    {\n'
-            '      "type": "Syntax / Type Error",\n'
+            '      "type": "Syntax Error",\n'
             '      "severity": "critical",\n'
-            '      "message": "narrayList<>() is an invalid identifier. Expected ArrayList<>.",\n'
-            '      "line": 4,\n'
-            '      "why_it_matters": "Spelling errors in class identifiers cause symbol resolution errors.",\n'
-            '      "suggested_fix": "Change narrayList to ArrayList.",\n'
-            '      "is_error": true,\n'
-            '      "level": "Level 1"\n'
-            '    },\n'
-            '    {\n'
-            '      "type": "Undefined Variable / Typo",\n'
-            '      "severity": "critical",\n'
-            '      "message": "mapeed is an undefined or misspelled variable. Expected map.",\n'
+            '      "message": "Missing colon at end of statement",\n'
             '      "line": 7,\n'
-            '      "why_it_matters": "Accessing misspelled variable names causes symbol resolution errors.",\n'
-            '      "suggested_fix": "Change mapeed to map.",\n'
+            '      "why_it_matters": "Missing colon breaks statement syntax.",\n'
+            '      "suggested_fix": "Add colon to statement.",\n'
             '      "is_error": true,\n'
-            '      "level": "Level 1"\n'
+            '      "level": "Error"\n'
             '    }\n'
             '  ],\n'
             '  "optimized_code": "Return ONLY complete compilable source code in target language.",\n'
@@ -285,11 +268,20 @@ class GroqProvider(BaseAIProvider):
             '  "level_3_solution_summary": "Linear time complexity solution using hash map for O(1) lookups."\n'
             "}\n"
             "CRITICAL RULES:\n"
-            "0. SCAN FULL CODE & REPORT ALL ERRORS: Inspect every line of code to detect ALL genuine independent errors across the entire submission.\n"
-            "1. Both level_1_brute_force and level_2_better_approach MUST contain valid runnable code snippets formatted strictly in the specified programming language.\n"
-            "2. If problem context is provided, tailor all explanations, algorithms, and code to the exact problem requirements.\n"
-            "3. If code is already optimal, set is_already_optimal=true and optimized_code=\"\".\n"
-            "4. Return ONLY raw valid JSON."
+            "0. ERROR DETECTION: Analyze the COMPLETE ORIGINAL SOURCE CODE and detect ALL genuine independent errors in any supported programming language. Do not stop after finding the first error.\n"
+            "1. EXACT LINE NUMBER: Every error MUST use the exact line number from the ORIGINAL source code provided by the user. Preserve all line breaks and blank lines exactly. Never default to line 1, class declaration line, method declaration line, or compiler-start line.\n"
+            "2. ERROR CONTEXT: For every issue, identify the exact invalid token/code, explain why it is wrong in its actual source context, and provide the appropriate fix. The reported line MUST contain or directly correspond to the actual error.\n"
+            "3. ROOT CAUSE: Ignore duplicate and cascading compiler/parser errors caused by the same root mistake. Report the meaningful root error instead of secondary errors.\n"
+            "4. MULTIPLE ERRORS: If multiple independent errors exist, return ALL of them as separate objects inside the issues array. Never combine errors and never overwrite or duplicate JSON keys.\n"
+            "5. NO FALSE POSITIVES: Do not report an error unless it is genuinely supported by the original source code and its language context. If the code is correct, return issues=[] .\n"
+            "6. PROBLEM URL CONTEXT: If a Problem URL is provided, treat the code according to the expected LeetCode/GFG environment, especially class Solution and the required function. Do not report missing main(), platform-provided imports, classes, types, or normal platform boilerplate as errors.\n"
+            "7. GROQ VALIDATION: Use full source-code context to determine whether an error actually exists. Static/compiler analysis is supporting evidence only; do not blindly copy compiler error locations when they conflict with the original source.\n"
+            "8. LINE VERIFICATION: Before returning each issue, cross-check the reported line against the ORIGINAL source and verify that the problematic token/code is actually present on that line. The AI Review line and Monaco Editor highlight must point to the same line.\n"
+            "9. JSON INTEGRITY: Every issue MUST be an independent JSON object containing exactly one type, severity, message, line, why_it_matters, suggested_fix, is_error, and level field. Never create duplicate JSON keys or mix fields between different errors.\n"
+            "10. Both level_1_brute_force and level_2_better_approach MUST contain valid runnable code snippets formatted strictly in the specified programming language.\n"
+            "11. If problem context is provided, tailor all explanations, algorithms, and code to the exact problem requirements.\n"
+            "12. If code is already optimal, set is_already_optimal=true and optimized_code=\"\".\n"
+            "13. Return ONLY raw valid JSON."
         )
 
         problem_ctx_str = ""
@@ -303,17 +295,12 @@ class GroqProvider(BaseAIProvider):
                 f"Description: {problem_info.get('description')}\n\n"
             )
 
-        line_numbered_code = "\n".join(
-            f"{idx + 1:3d} | {line}"
-            for idx, line in enumerate(code.splitlines())
-        )
-
         prompt = (
             f"{problem_ctx_str}"
             f"Language: {language}\n\n"
-            f"User's Original Submitted Monaco Code (Exact 1-based line numbers on left):\n```\n{line_numbered_code}\n```\n\n"
-            f"Supporting Static Analysis & Compiler Evidence (For Reference Only):\n{json.dumps(static_analysis, indent=2)}\n\n"
-            "Perform contextual code analysis. Use the static analysis evidence as reference, but YOU are the primary source and final decision maker for genuine errors, exact Monaco line numbers, invalid tokens, and explanations. Output raw JSON."
+            f"User's Submitted Source Code:\n```\n{code}\n```\n\n"
+            f"Static Analysis Report: {json.dumps(static_analysis)}\n\n"
+            "Perform code audit and output standard JSON response."
         )
 
         payload = {
@@ -475,27 +462,6 @@ class GroqProvider(BaseAIProvider):
                                 "explanation": str(raw_dsa_puzzle.get("explanation", "Review algorithmic complexity to pick optimal approach.")).strip()
                             }
 
-                    raw_issues_list = result.get("issues", []) if isinstance(result.get("issues", []), list) else []
-                    sanitized_issues: list[dict[str, Any]] = []
-                    for raw_item in raw_issues_list:
-                        if not isinstance(raw_item, dict):
-                            continue
-                        line_val = self._to_int(raw_item.get("line", 1), 1)
-                        msg = str(raw_item.get("message", "")).strip()
-                        why_matters = str(raw_item.get("why_it_matters", msg)).strip()
-                        sug_fix = str(raw_item.get("suggested_fix", "")).strip()
-                        if msg:
-                            sanitized_issues.append({
-                                "type": str(raw_item.get("type", "Syntax Error")).strip(),
-                                "severity": str(raw_item.get("severity", "critical")).strip().lower(),
-                                "message": msg,
-                                "line": max(1, line_val),
-                                "why_it_matters": why_matters,
-                                "suggested_fix": sug_fix,
-                                "is_error": True,
-                                "level": "Level 1",
-                            })
-
                     normalized = {
                         "summary": summary_text,
                         "overall_score": score_100,
@@ -519,7 +485,7 @@ class GroqProvider(BaseAIProvider):
                         "suggested_fixes": top_fixes_raw[:3],
                         "documentation_suggestions": [],
                         "unit_test_suggestions": [],
-                        "issues": sanitized_issues,
+                        "issues": result.get("issues", []) if isinstance(result.get("issues", []), list) else [],
                     }
 
                     return normalized
