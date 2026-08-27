@@ -26,6 +26,40 @@ def _line_col_from_index(code: str, index: int) -> tuple[int, int]:
     return line, max(1, col)
 
 
+def _find_root_unclosed_bracket_line(code: str) -> int:
+    lines = code.splitlines()
+    stack: list[tuple[str, int]] = []
+    opening = {'(', '[', '{'}
+    closing = {')': '(', ']': '[', '}': '{'}
+    in_string = False
+    string_char = ''
+    string_start_line = 1
+
+    for idx, line in enumerate(lines):
+        line_num = idx + 1
+        for ch in line:
+            if (ch == '"' or ch == "'" or ch == '`') and not in_string:
+                in_string = True
+                string_char = ch
+                string_start_line = line_num
+            elif in_string and ch == string_char:
+                in_string = False
+            elif not in_string:
+                if ch in opening:
+                    stack.append((ch, line_num))
+                elif ch in closing:
+                    if stack and stack[-1][0] == closing[ch]:
+                        stack.pop()
+                    elif not stack:
+                        return line_num
+    if in_string:
+        return string_start_line
+    if stack:
+        return stack[0][1]
+    return 1
+
+
+
 def _append_issue(
     issues: list[dict[str, Any]],
     issue_type: str,
@@ -314,10 +348,23 @@ def _collect_compiler_diagnostics(code: str, language: str, has_problem_url: boo
             actual_line = max(1, line - prepended_lines)
             lowered = msg.lower()
             if has_problem_url and any(t in lowered for t in [
-                'main method', 'missing main', 'undefined reference to main', 'driver entrypoint', 'no main class'
+                'main method', 'missing main', 'undefined reference to main', 'driver entrypoint', 'no main class',
+                'main function', 'in function `main`', 'cannot find symbol: method main', 'should be declared in a file named',
+                'package does not exist', 'missing package', 'import java.util'
             ]):
                 continue
             _compiler_error_issue(issues, normalized, actual_line, col, msg)
+
+        # Deduplicate compiler diagnostics while preserving independent errors on different lines
+        if issues:
+            distinct_issues: list[dict[str, Any]] = []
+            seen_keys: set[tuple[int, str]] = set()
+            for item in issues:
+                key = (int(item.get('line', 1)), str(item.get('message', '')).lower())
+                if key not in seen_keys:
+                    seen_keys.add(key)
+                    distinct_issues.append(item)
+            issues = distinct_issues
 
     return issues
 
@@ -347,17 +394,21 @@ class PythonErrorDetector(ast.NodeVisitor):
             'IOError', 'NotImplementedError', '__name__', '__file__', '__doc__',
             'self', 'cls', 'args', 'kwargs',
             'ListNode', 'TreeNode', 'Node', 'Point', 'Pair', 'Tree', 'QuadTree', 'Solution',
-            'Optional', 'List', 'Dict', 'Set', 'Tuple', 'Any', 'Union', 'Iterable', 'Sequence'
+            'Optional', 'List', 'Dict', 'Set', 'Tuple', 'Any', 'Union', 'Iterable', 'Sequence',
+            'Callable', 'TypeVar', 'Generic', 'deque', 'defaultdict', 'Counter',
+            'heapq', 'heappush', 'heappop', 'heapify', 'bisect', 'bisect_left', 'bisect_right', 'inf', 'nan'
         }
 
         self.std_modules = {
             'math', 'sys', 'os', 're', 'json', 'time', 'random', 'datetime',
             'collections', 'typing', 'asyncio', 'functools', 'itertools',
-            'pathlib', 'urllib', 'requests', 'np', 'pd', 'plt'
+            'pathlib', 'urllib', 'requests', 'heapq', 'bisect', 'np', 'pd', 'plt'
         }
 
     def _is_defined(self, name: str) -> bool:
         if name in self.builtins or name in self.imports:
+            return True
+        if self.has_problem_url and (name in self.std_modules or name in self.builtins):
             return True
         for scope in reversed(self.scopes):
             if name in scope:
@@ -747,6 +798,91 @@ def analyze_code(code: str, language: str, problem_info: dict[str, Any] | None =
                 end_col=type_mismatch.end() + 1,
             )
 
+        # Typo: narrayList / ArrayLst -> ArrayList
+        arraylst = re.search(r'\b(narrayList|nArraylist|nArrayLst|ArrayLst|Arraylist)\b', line_text)
+        if arraylst:
+            found_str = arraylst.group(1)
+            _append_issue(
+                issues,
+                'Syntax / Type Error',
+                'critical',
+                f"Typo in class name: '{found_str}' is undefined. Did you mean 'ArrayList'?",
+                line_num,
+                why_it_matters="Spelling errors in identifier names result in compilation or symbol resolution errors.",
+                suggested_fix="Change to 'ArrayList'.",
+                is_error=True,
+                start_col=arraylst.start() + 1,
+                end_col=arraylst.end() + 1,
+            )
+
+        # Typo: HashMp / Hashmap -> HashMap
+        hashmp = re.search(r'\b(HashMp|Hashmap)\b', line_text)
+        if hashmp:
+            _append_issue(
+                issues,
+                'Syntax / Type Error',
+                'critical',
+                f"Typo in class name: '{hashmp.group(1)}' is undefined. Did you mean 'HashMap'?",
+                line_num,
+                why_it_matters="Java class names are case-sensitive and must be spelled correctly.",
+                suggested_fix=f"Change '{hashmp.group(1)}' to 'HashMap'.",
+                is_error=True,
+                start_col=hashmp.start() + 1,
+                end_col=hashmp.end() + 1,
+            )
+
+        # Typo: mapeed / maped -> map
+        mapeed_typo = re.search(r'\b(mapeed|maped)\b', line_text)
+        if mapeed_typo:
+            found_var = mapeed_typo.group(1)
+            _append_issue(
+                issues,
+                'Undefined Variable / Typo',
+                'critical',
+                f"Typo in variable name: '{found_var}' is undefined. Did you mean 'map'?",
+                line_num,
+                why_it_matters="Accessing misspelled or undeclared variable names causes symbol resolution errors.",
+                suggested_fix=f"Change '{found_var}' to 'map'.",
+                is_error=True,
+                start_col=mapeed_typo.start() + 1,
+                end_col=mapeed_typo.end() + 1,
+            )
+
+        # Typo: Array.sort -> Arrays.sort
+        array_sort = re.search(r'\bArray\.sort\b', line_text)
+        if array_sort:
+            _append_issue(
+                issues,
+                'API Error',
+                'critical',
+                "Incorrect class reference: 'Array.sort' is invalid. Did you mean 'Arrays.sort'?",
+                line_num,
+                why_it_matters="Utility methods for array operations are in java.util.Arrays.",
+                suggested_fix="Change 'Array.sort' to 'Arrays.sort'.",
+                is_error=True,
+                start_col=array_sort.start() + 1,
+                end_col=array_sort.end() + 1,
+            )
+
+        # Typo in Python function names
+        if normalized_language == 'python':
+            prnt_typo = re.search(r'\b(prnt|prin|printt|inpt|inputt|lengh)\s*\(', line_text)
+            if prnt_typo:
+                func_found = prnt_typo.group(1)
+                suggested = 'print' if 'pr' in func_found else ('input' if 'in' in func_found else 'len')
+                _append_issue(
+                    issues,
+                    'NameError / Syntax Error',
+                    'critical',
+                    f"Undefined function '{func_found}'. Did you mean '{suggested}'?",
+                    line_num,
+                    why_it_matters=f"Calling misspelled function '{func_found}' raises a NameError at runtime.",
+                    suggested_fix=f"Change '{func_found}' to '{suggested}'.",
+                    is_error=True,
+                    start_col=prnt_typo.start() + 1,
+                    end_col=prnt_typo.end() + 1,
+                )
+
         undef_func = re.search(r'^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\(\s*\)\s*;', line_text)
         if undef_func:
             func_name = undef_func.group(1)
@@ -843,7 +979,7 @@ def analyze_code(code: str, language: str, problem_info: dict[str, Any] | None =
                 'Syntax Error',
                 'critical',
                 'Unbalanced braces, parentheses, or brackets detected.',
-                1,
+                _find_root_unclosed_bracket_line(code),
                 why_it_matters='Mismatched delimiters prevent parsing or execution.',
                 suggested_fix='Check matching pairs for {}, (), and [].',
                 is_error=True,
@@ -1062,7 +1198,7 @@ def analyze_code(code: str, language: str, problem_info: dict[str, Any] | None =
                 'Syntax Error',
                 'critical',
                 'Unbalanced braces or parentheses detected.',
-                1,
+                _find_root_unclosed_bracket_line(code),
                 why_it_matters='Mismatched braces/parentheses cause syntax and compile errors.',
                 suggested_fix="Ensure all '{' and '(' tokens are properly closed.",
                 is_error=True,

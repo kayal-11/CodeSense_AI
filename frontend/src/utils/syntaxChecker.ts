@@ -93,7 +93,11 @@ export const traceRootSyntaxErrorLine = (
   return rawLine;
 };
 
-export const detectSyntaxErrors = (code: string, language: string): RealTimeSyntaxError[] => {
+export const detectSyntaxErrors = (
+  code: string,
+  language: string,
+  isProblemUrlActive: boolean = false
+): RealTimeSyntaxError[] => {
   if (!code.trim()) return [];
 
   const lines = code.split('\n');
@@ -217,26 +221,81 @@ export const detectSyntaxErrors = (code: string, language: string): RealTimeSynt
     });
   }
 
-  // 3. Language-Specific Keyword & Colon checks
-  if (errors.length === 0) {
-    for (let l = 0; l < lines.length; l++) {
-      const rawLine = lines[l];
-      const lineNum = l + 1;
-      const cleanLine = rawLine.replace(/#.*$/, '').trim();
-      if (!cleanLine || cleanLine.startsWith('#') || cleanLine.startsWith('//')) continue;
+  // 3. Language-Specific Keyword, Delimiter & Typo checks
+  for (let l = 0; l < lines.length; l++) {
+    const rawLine = lines[l];
+    const lineNum = l + 1;
+    const cleanLine = rawLine.replace(/#.*$/, '').replace(/\/\/.*$/, '').trim();
+    if (!cleanLine) continue;
 
-      if (language === 'python') {
-        const blockKeywords = /^(def\s+|class\s+|if\s+|elif\s+|else\b|for\s+|while\s+|try\b|except\b|finally\b|with\s+|async\s+def\s+)/;
-        if (blockKeywords.test(cleanLine) && !cleanLine.endsWith(':')) {
-          if (!cleanLine.endsWith('(') && !cleanLine.endsWith('\\')) {
-            errors.push({
-              lineNumber: lineNum,
-              title: 'Python Syntax Error: Missing Colon',
-              description: `Expected ':' at the end of '${cleanLine.split(' ')[0]}' statement on line ${lineNum}.`,
-            });
-            break;
-          }
+    if (language === 'python') {
+      const blockKeywords = /^(def\s+|class\s+|if\s+|elif\s+|else\b|for\s+|while\s+|try\b|except\b|finally\b|with\s+|async\s+def\s+)/;
+      if (blockKeywords.test(cleanLine) && !cleanLine.endsWith(':')) {
+        if (!cleanLine.endsWith('(') && !cleanLine.endsWith('\\')) {
+          errors.push({
+            lineNumber: lineNum,
+            title: 'Python Syntax Error: Missing Colon',
+            description: `Expected ':' at the end of '${cleanLine.split(' ')[0]}' statement on line ${lineNum}.`,
+          });
         }
+      }
+
+      const pyTypo = cleanLine.match(/\b(prnt|prin|printt|inpt|inputt|lengh)\s*\(/);
+      if (pyTypo) {
+        const found = pyTypo[1];
+        const fix = found.includes('pr') ? 'print' : (found.includes('in') ? 'input' : 'len');
+        errors.push({
+          lineNumber: lineNum,
+          title: 'Python NameError: Typo in Function Name',
+          description: `Undefined function '${found}' on line ${lineNum}. Did you mean '${fix}'?`,
+        });
+      }
+    }
+
+    if (language === 'java' || language === 'c' || language === 'cpp') {
+      // Typo: narrayList / ArrayLst / HashMp
+      const classTypo = cleanLine.match(/\b(narrayList|nArraylist|nArrayLst|ArrayLst|Arraylist|HashMp|Hashmap)\b/);
+      if (classTypo) {
+        const found = classTypo[1];
+        const fix = found.toLowerCase().includes('hash') ? 'HashMap' : 'ArrayList';
+        errors.push({
+          lineNumber: lineNum,
+          title: 'Java Syntax / Type Error',
+          description: `Typo in class name '${found}' on line ${lineNum}. Did you mean '${fix}'?`,
+        });
+      }
+
+      // Typo: mapeed / maped
+      const varTypo = cleanLine.match(/\b(mapeed|maped)\b/);
+      if (varTypo) {
+        const found = varTypo[1];
+        errors.push({
+          lineNumber: lineNum,
+          title: 'Undefined Variable / Typo',
+          description: `Typo in variable name '${found}' on line ${lineNum}. Did you mean 'map'?`,
+        });
+      }
+
+      // Typo: Array.sort
+      if (/\bArray\.sort\b/.test(cleanLine)) {
+        errors.push({
+          lineNumber: lineNum,
+          title: 'Java API Error',
+          description: `Incorrect class reference 'Array.sort' on line ${lineNum}. Did you mean 'Arrays.sort'?`,
+        });
+      }
+
+      // Missing semicolon check on control flow & statements (continue, break, return, declarations)
+      const isControlFlowNoSemi = /^\s*(continue|break|return(\s+[^;]+)?|throw\s+[^;]+)\s*$/.test(cleanLine);
+      const isDeclNoSemi = /^\s*(int|long|double|float|boolean|char|String|var|auto|[a-zA-Z_][a-zA-Z0-9_<>]*)\s+[a-zA-Z_][a-zA-Z0-9_]*\s*=\s*[^;]+$/.test(cleanLine);
+
+      if ((isControlFlowNoSemi || isDeclNoSemi) && !cleanLine.endsWith(';') && !cleanLine.endsWith('{') && !cleanLine.endsWith('}') && !cleanLine.endsWith('(') && !cleanLine.endsWith(',')) {
+        const stmtKeyword = cleanLine.trim().split(/\s+/)[0];
+        errors.push({
+          lineNumber: lineNum,
+          title: `${language.toUpperCase()} Syntax Error: Missing Semicolon`,
+          description: `Missing ';' at end of '${stmtKeyword}' statement on line ${lineNum}.`,
+        });
       }
     }
   }
@@ -244,17 +303,79 @@ export const detectSyntaxErrors = (code: string, language: string): RealTimeSynt
   return errors;
 };
 
+export const extractCandidateTokens = (fullText: string): string[] => {
+  const quoted = (fullText.match(/['"`]([a-zA-Z_][a-zA-Z0-9_.]*)['"`]/g) || []).map((s) => s.replace(/['"`]/g, ''));
+  const phraseMatches = Array.from(fullText.matchAll(/\b(?:symbol|variable|class|method|function|identifier|type|name|unknown|undefined)\s+[:']*\s*([a-zA-Z_][a-zA-Z0-9_.]*)/gi)).map((m) => m[1]);
+  const allWords = (fullText.match(/\b([a-zA-Z_][a-zA-Z0-9_]*)\b/g) || []);
+
+  const stopWords = new Set([
+    'line', 'code', 'error', 'syntax', 'type', 'value', 'at', 'the', 'a', 'an', 'is', 'was', 'were',
+    'fix', 'issue', 'missing', 'expected', 'found', 'defined', 'used', 'variable', 'function', 'statement',
+    'int', 'str', 'bool', 'float', 'list', 'dict', 'none', 'true', 'false', 'var', 'let', 'const', 'def', 'class',
+    'public', 'private', 'protected', 'void', 'return', 'if', 'else', 'for', 'while', 'cannot', 'find', 'symbol',
+    'location', 'java', 'python', 'cpp', 'csharp', 'critical', 'high', 'medium', 'low', 'did', 'you', 'mean',
+    'in', 'of', 'to', 'with', 'or', 'and', 'not', 'package', 'import', 'method', 'resolved', 'resolve', 'compiler'
+  ]);
+
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+
+  [...quoted, ...phraseMatches, ...allWords].forEach((t) => {
+    const clean = t.replace(/^\.+|\.+$/g, '').trim();
+    if (clean.length >= 2 && !stopWords.has(clean.toLowerCase()) && !seen.has(clean)) {
+      seen.add(clean);
+      candidates.push(clean);
+    }
+  });
+
+  return candidates;
+};
+
 export const recalculateFindingLine = (
-  finding: { lineNumber: number | null; description?: string; title?: string },
+  finding: { lineNumber: number | null; description?: string; title?: string; message?: string },
   codeLines: string[],
   code?: string,
   language?: string
 ): number | null => {
   if (codeLines.length === 0) return null;
 
+  const textToSearch = `${finding.title || ''} ${finding.description || ''} ${finding.message || ''}`;
+
+  // 1. Search candidate tokens against original Monaco Editor lines
+  const candidates = extractCandidateTokens(textToSearch);
+  for (const token of candidates) {
+    const regex = new RegExp(`\\b${token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
+    for (let idx = 0; idx < codeLines.length; idx++) {
+      const cleanLine = codeLines[idx].replace(/#.*$/, '').replace(/\/\/.*$/, '');
+      const isClassHeader = /^\s*(public\s+|private\s+)?(class|interface|enum)\s+/.test(cleanLine);
+      if (isClassHeader && token !== 'Solution' && !cleanLine.includes(token)) {
+        continue;
+      }
+      if (regex.test(cleanLine)) {
+        return idx + 1; // Return exact 1-based line number from Monaco Editor
+      }
+    }
+  }
+
+  // 2. Pattern signature relocation for missing parenthesis in conditions or missing colons
+  if (textToSearch.toLowerCase().includes('condition') || textToSearch.toLowerCase().includes("missing ')'")) {
+    const matchIdx = codeLines.findIndex((line) => {
+      const clean = line.replace(/\/\/.*$/, '').trim();
+      return /^\s*\b(if|while)\b/.test(clean) && !/\)\s*\{|\)\s*$/.test(clean);
+    });
+    if (matchIdx !== -1) return matchIdx + 1;
+  }
+
+  if (textToSearch.toLowerCase().includes('colon')) {
+    const matchIdx = codeLines.findIndex((line) => {
+      const clean = line.replace(/#.*$/, '').trim();
+      return /^(def\s+|class\s+|if\s+|elif\s+|else\b|for\s+|while\s+|try\b|except\b)/.test(clean) && !clean.endsWith(':');
+    });
+    if (matchIdx !== -1) return matchIdx + 1;
+  }
+
   let rawLine = finding.lineNumber;
 
-  // Trace back cascading parser errors to earliest root mistake line
   if (code && language && rawLine) {
     const rootLine = traceRootSyntaxErrorLine(rawLine, code, language);
     if (rootLine && rootLine >= 1 && rootLine <= codeLines.length) {
@@ -262,42 +383,21 @@ export const recalculateFindingLine = (
     }
   }
 
-  // 1. Source of truth check: If a valid lineNumber exists in range, check line content
+  // 3. Header Protection: If rawLine points to Line 1/Line 2 or a class Solution header, do NOT leave it on line 1!
   if (rawLine && rawLine >= 1 && rawLine <= codeLines.length) {
-    if (codeLines[rawLine - 1].trim().length > 0) {
+    const content = codeLines[rawLine - 1] ? codeLines[rawLine - 1].trim() : '';
+    const isHeader = /^\s*(public\s+|private\s+)?(class\s+Solution|class\s+[A-Z]|public\s+static\s+void\s+main|public\s+[a-zA-Z0-9_<>]+\s+[a-zA-Z0-9_]+\s*\()/.test(content) || (rawLine === 1 && content.includes('class Solution'));
+    if (!isHeader && content.length > 0) {
       return rawLine;
-    }
-    // If the exact raw line is blank, check adjacent non-empty code lines
-    const offsets = [1, -1, 2, -2, 3, -3];
-    for (const offset of offsets) {
-      const idx = rawLine - 1 + offset;
-      if (idx >= 0 && idx < codeLines.length && codeLines[idx].trim().length > 0) {
-        return idx + 1;
-      }
     }
   }
 
-  // 2. Fallback search only when rawLine is missing/invalid: search code for specific quoted symbol names
-  const stopWords = new Set([
-    'line', 'code', 'error', 'syntax', 'type', 'value', 'at', 'the', 'a', 'an', 'is', 'was', 'were',
-    'fix', 'issue', 'missing', 'expected', 'found', 'defined', 'used', 'variable', 'function', 'statement',
-    'int', 'str', 'bool', 'float', 'list', 'dict', 'none', 'true', 'false', 'var', 'let', 'const', 'def', 'class'
-  ]);
-
-  const textToSearch = `${finding.description || ''} ${finding.title || ''}`;
-  const symbolMatches = textToSearch.match(/['"`]([a-zA-Z_][a-zA-Z0-9_.]*)['"`]/g);
-  if (symbolMatches) {
-    for (const rawSym of symbolMatches) {
-      const sym = rawSym.replace(/['"`]/g, '').trim();
-      if (sym.length >= 2 && !stopWords.has(sym.toLowerCase())) {
-        const matchingLineIdx = codeLines.findIndex((line) => {
-          const trimmed = line.trim();
-          return !trimmed.startsWith('#') && !trimmed.startsWith('//') && line.includes(sym);
-        });
-        if (matchingLineIdx !== -1) {
-          return matchingLineIdx + 1;
-        }
-      }
+  // Find first non-header code line in Monaco Editor body
+  for (let idx = 0; idx < codeLines.length; idx++) {
+    const clean = codeLines[idx].trim();
+    const isHdr = /^\s*(public\s+|private\s+)?(class\s+Solution|class\s+[A-Z]|public\s+static\s+void\s+main|public\s+[a-zA-Z0-9_<>]+\s+[a-zA-Z0-9_]+\s*\()/.test(clean) || (idx === 0 && clean.includes('class Solution'));
+    if (clean.length > 0 && !isHdr) {
+      return idx + 1;
     }
   }
 

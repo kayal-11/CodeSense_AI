@@ -323,18 +323,28 @@ async def review_code(
         unit_test_suggestions = _coerce_string_list(ai_analysis.get('unit_test_suggestions', []))
 
         raw_issues: list[dict[str, Any]] = []
-        raw_issues.extend(_coerce_issue_list(static_analysis.get('issues', [])))
-        raw_issues.extend(_coerce_issue_list(ai_analysis.get('issues', [])))
+        # Groq AI is the primary source and final decision maker for code errors
+        ai_issues = _coerce_issue_list(ai_analysis.get('issues', []))
+        raw_issues.extend(ai_issues)
 
         for group_name in ['bugs', 'security_vulnerabilities', 'performance_issues', 'code_smells', 'best_practice_violations']:
             raw_issues.extend(_coerce_issue_list(ai_analysis.get(group_name, [])))
 
-        normalized_issues = dedupe_and_sort_issues([normalize_issue(issue) for issue in raw_issues])
+        # Fallback to static analysis ONLY if AI returned no summary (e.g. offline fallback mode)
+        if not raw_issues and not ai_analysis.get('summary') and static_analysis.get('issues'):
+            raw_issues.extend(_coerce_issue_list(static_analysis.get('issues', [])))
+
+        has_prob_url = bool(problem_info)
+        normalized_issues = dedupe_and_sort_issues([normalize_issue(issue) for issue in raw_issues], source_code=payload.code, has_problem_url=has_prob_url)
         buckets = split_issue_buckets(normalized_issues)
         breakdown = severity_breakdown(normalized_issues)
+
         # Use AI-generated score and summary if returned by active provider
         ai_score = ai_analysis.get('score') or ai_analysis.get('overall_score')
-        if ai_score is not None:
+        if not normalized_issues and has_prob_url:
+            score = 100
+            overall_score = 100
+        elif ai_score is not None:
             score = _coerce_int(ai_score, deterministic_score(normalized_issues))
             overall_score = score
         else:
@@ -347,6 +357,8 @@ async def review_code(
         ai_summary = ai_analysis.get('summary')
         if ai_summary and isinstance(ai_summary, str) and ai_summary.strip():
             summary = ai_summary.strip()
+        elif not normalized_issues and has_prob_url:
+            summary = f"No issues detected for {normalized_language}. Solution logic is correct."
         else:
             summary = deterministic_summary(normalized_language, normalized_issues, breakdown, score)
 

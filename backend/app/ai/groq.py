@@ -205,6 +205,7 @@ class GroqProvider(BaseAIProvider):
             "   - `ArrayLis` misspelled -> User code error -> MUST REPORT AS SYNTAX / TYPE ERROR.\n"
             "4. IF THE USER'S LOGIC IS CORRECT AND CONTAINS NO TYPOS/ERRORS:\n"
             "   - Clearly state that the solution logic is correct. DO NOT manufacture warnings or errors.\n"
+            "   - Set issues to [] and bugs to []. Do NOT suggest adding missing imports or main().\n"
             if has_problem_url
             else "NO URL PROVIDED MODE:\n"
             "Treat the code as standalone source code.\n"
@@ -216,16 +217,20 @@ class GroqProvider(BaseAIProvider):
             "You are CodeSense AI, an expert code reviewer and competition judge. "
             "Analyze the provided source code and optional problem context.\n\n"
             f"{mode_instruction}\n"
+            "CRITICAL LINE NUMBER ACCURACY RULE:\n"
+            "Count line numbers starting from line 1 of the user's submitted source code in ```code```.\n"
+            "Every object in `issues` MUST specify the exact 1-based `line` number where the error actually occurs in ```code``` (e.g. line 4 for ArrayLst, line 12 for condition error).\n"
+            "NEVER default to line 1 unless the error actually occurs on line 1.\n\n"
             "Respond ONLY in valid JSON adhering strictly to this schema:\n"
             "{\n"
-            '  "score_out_of_ten": "9.2/10", // String like "9.2/10" or "8/10"\n'
+            '  "score_out_of_ten": "9.2/10", // String like "9.2/10" or "10/10"\n'
             '  "overall_score": 92, // Integer 1 to 100\n'
             '  "correctness": "Correct", // 1 to 3 words\n'
             '  "complexity": "O(n) | O(n)", // e.g. "O(n) | O(n)" or "O(1) | O(1)"\n'
             '  "security": "No issues", // 1 to 4 words\n'
             '  "top_fixes": [\n'
-            '    "Import `Map` & `HashMap`",\n'
-            '    "Validate input length",\n'
+            '    "Validate input boundary constraints",\n'
+            '    "Optimize memory allocation",\n'
             '    "Improve exception handling"\n'
             '  ],\n'
             '  "verdict": "Production-ready with minor improvements.", // 1 concise sentence\n'
@@ -286,12 +291,17 @@ class GroqProvider(BaseAIProvider):
                 f"Description: {problem_info.get('description')}\n\n"
             )
 
+        line_numbered_code = "\n".join(
+            f"{idx + 1:3d} | {line}"
+            for idx, line in enumerate(code.splitlines())
+        )
+
         prompt = (
             f"{problem_ctx_str}"
             f"Language: {language}\n\n"
-            f"User's Submitted Source Code:\n```\n{code}\n```\n\n"
-            f"Static Analysis Report: {json.dumps(static_analysis)}\n\n"
-            "Perform code audit and output standard JSON response."
+            f"User's Original Submitted Monaco Code (Exact 1-based line numbers on left):\n```\n{line_numbered_code}\n```\n\n"
+            f"Supporting Static Analysis & Compiler Evidence (For Reference Only):\n{json.dumps(static_analysis, indent=2)}\n\n"
+            "Perform contextual code analysis. Use the static analysis evidence as reference, but YOU are the primary source and final decision maker for genuine errors, exact Monaco line numbers, invalid tokens, and explanations. Output raw JSON."
         )
 
         payload = {

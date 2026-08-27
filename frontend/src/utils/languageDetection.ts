@@ -98,11 +98,12 @@ export const detectLanguage = (code: string, fileNameHint?: string): LanguageDet
     cpp: 0,
   };
 
-  const extension = normalizeExtension(fileNameHint ?? '');
+  const isGenericDefaultFile = /^example\.(py|java|c|cpp|cc|h)$/i.test(fileNameHint?.trim() ?? '');
+  const extension = isGenericDefaultFile ? '' : normalizeExtension(fileNameHint ?? '');
   const extensionLanguage = extensionToLanguage[extension];
 
   if (extensionLanguage && scores[extensionLanguage] !== undefined) {
-    scores[extensionLanguage] += 6;
+    scores[extensionLanguage] += 4;
   }
 
   for (const rule of patternRules) {
@@ -125,18 +126,6 @@ export const detectLanguage = (code: string, fileNameHint?: string): LanguageDet
 
   const secondScore = ranked[1]?.[1] ?? 0;
   const gap = topScore - secondScore;
-
-  const syntaxScoreForExtension = extensionLanguage ? scores[extensionLanguage] ?? 0 : 0;
-  const extensionValidated = Boolean(extensionLanguage && syntaxScoreForExtension >= 6);
-
-  if (extensionLanguage && extensionValidated) {
-    return {
-      language: extensionLanguage,
-      confidence: 'high',
-      detectedLanguage: labelForLanguage(extensionLanguage),
-      reason: `Detected from file extension (.${extension}) and confirmed by syntax analysis.`,
-    };
-  }
 
   const confidence: LanguageConfidence =
     topScore >= scoreThresholds.high && gap >= 2

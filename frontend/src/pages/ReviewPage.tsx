@@ -1339,7 +1339,7 @@ const ReviewPage = () => {
 
   const codeLines = useMemo(() => code.split('\n'), [code]);
 
-  const realTimeSyntaxErrors = useMemo(() => detectSyntaxErrors(code, language), [code, language]);
+  const realTimeSyntaxErrors = useMemo(() => detectSyntaxErrors(code, language, isProblemUrlActive), [code, language, isProblemUrlActive]);
 
   const { level1Errors, improvements } = useMemo(() => {
     if (isAlreadyOptimal) {
@@ -1361,21 +1361,19 @@ const ReviewPage = () => {
     const rawErrors = items.filter((f) => isErrorFinding(f));
     const nonErrors = items.filter((f) => !isErrorFinding(f));
 
-    // Convert real-time syntax errors to finding cards ONLY when not in Problem Link Mode
-    const realTimeFindingCards: FindingCard[] = isProblemUrlActive
-      ? []
-      : realTimeSyntaxErrors.map((rtErr, index) => ({
-          id: `realtime-syntax-err-${index}`,
-          category: 'Syntax Error',
-          severity: 'critical',
-          title: rtErr.title,
-          lineNumber: rtErr.lineNumber,
-          description: rtErr.description,
-          whyItMatters: 'Syntax errors break execution or compilation and prevent code from running.',
-          suggestedFix: `Fix the syntax error at line ${rtErr.lineNumber}: ${rtErr.title}`,
-          isError: true,
-          level: 'Level 1',
-        }));
+    // Convert real-time syntax errors to finding cards for submitted code
+    const realTimeFindingCards: FindingCard[] = realTimeSyntaxErrors.map((rtErr, index) => ({
+      id: `realtime-syntax-err-${index}`,
+      category: 'Syntax Error',
+      severity: 'critical',
+      title: rtErr.title,
+      lineNumber: rtErr.lineNumber,
+      description: rtErr.description,
+      whyItMatters: 'Syntax errors break execution or compilation and prevent code from running.',
+      suggestedFix: `Fix the syntax error at line ${rtErr.lineNumber}: ${rtErr.title}`,
+      isError: true,
+      level: 'Level 1',
+    }));
 
     // Combine real-time syntax errors with analysis errors
     const allErrorsToProcess = [...realTimeFindingCards, ...rawErrors];
@@ -1383,9 +1381,7 @@ const ReviewPage = () => {
     const mergedErrorsMap = new Map<string, FindingCard>();
     allErrorsToProcess.forEach((err) => {
       // Use the exact line number where each detected error actually occurs in current source code
-      const calculatedLine = (err.lineNumber && err.lineNumber >= 1 && err.lineNumber <= codeLines.length)
-        ? err.lineNumber
-        : (recalculateFindingLine(err, codeLines, code, language) ?? getValidErrorLineNumber(err.lineNumber, codeLines));
+      const calculatedLine = recalculateFindingLine(err, codeLines, code, language) ?? getValidErrorLineNumber(err.lineNumber, codeLines);
       if (!calculatedLine) return; // Skip stale errors whose target code no longer exists or is empty
 
       const updatedErr = { ...err, lineNumber: calculatedLine };
@@ -1403,7 +1399,24 @@ const ReviewPage = () => {
         mergedErrorsMap.set(key, updatedErr);
       }
     });
-    const errors = Array.from(mergedErrorsMap.values());
+    let errors = Array.from(mergedErrorsMap.values());
+
+    // Cascading error suppression on frontend:
+    // If a root syntax error exists on line L, suppress downstream cascading parser errors on lines > L
+    if (errors.length > 1) {
+      errors.sort((a, b) => (a.lineNumber ?? Number.MAX_SAFE_INTEGER) - (b.lineNumber ?? Number.MAX_SAFE_INTEGER));
+      const rootLine = errors[0].lineNumber ?? 1;
+      errors = errors.filter((err, idx) => {
+        if (idx === 0) return true;
+        const line = err.lineNumber ?? 1;
+        const cat = (err.category || '').toLowerCase();
+        const desc = (err.description || '').toLowerCase();
+        if (line > rootLine && (cat.includes('syntax') || desc.includes('unexpected') || desc.includes('expected'))) {
+          return false;
+        }
+        return true;
+      });
+    }
 
     const sortFn = (a: FindingCard, b: FindingCard) => {
       const severityDiff = (severityRank[b.severity] || 0) - (severityRank[a.severity] || 0);
@@ -2014,7 +2027,7 @@ const ReviewPage = () => {
                 ) : (
                   <>
                     {/* Errors Section */}
-                    {level1Errors.length > 0 && (
+                    {level1Errors.length > 0 ? (
                       <div className="space-y-2">
                         <div className="flex items-center justify-between">
                           <p className="text-[11px] font-bold text-rose-400 flex items-center gap-1.5 uppercase tracking-wide">
@@ -2034,15 +2047,26 @@ const ReviewPage = () => {
                             >
                               <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
                                 <span className="rounded border border-red-500/40 bg-red-500/20 px-1.5 py-0.5 text-[10px] font-bold uppercase text-red-200">
-                                  🔴 Error — {formatLineRangeLabel(finding.lineNumber, finding.endLineNumber)}
+                                  🔴 ERROR — LINE {finding.lineNumber || 'X'}
                                 </span>
                               </div>
                               <p className="text-xs text-slate-100 font-medium leading-snug">
+                                <span className="text-red-300 font-bold">What is wrong: </span>
                                 {oneLineText(finding.description || finding.title)}
                               </p>
+                              {(finding.whyItMatters || finding.suggestedFix) && (
+                                <p className="text-xs text-slate-300 leading-snug mt-1">
+                                  <span className="text-slate-400 font-bold">Explanation: </span>
+                                  {oneLineText(finding.whyItMatters || finding.suggestedFix)}
+                                </p>
+                              )}
                             </button>
                           ))}
                         </div>
+                      </div>
+                    ) : (
+                      <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs font-semibold text-emerald-300 flex items-center gap-2">
+                        <span>✨ No errors detected.</span>
                       </div>
                     )}
 
