@@ -282,6 +282,11 @@ class GroqProvider(BaseAIProvider):
             "11. If problem context is provided, tailor all explanations, algorithms, and code to the exact problem requirements.\n"
             "12. If code is already optimal, set is_already_optimal=true and optimized_code=\"\".\n"
             "13. Return ONLY raw valid JSON."
+            "14. JSON VALIDATION: Before returning the response, verify that every { has a matching }, every [ has a matching ], all strings are properly escaped, and the complete response is valid JSON.\n"
+            "15. Every nested object such as issues, level_1_brute_force, level_2_better_approach, and dsa_puzzle MUST be completely closed before the parent JSON object is closed.\n"
+            "16. Never truncate the JSON response. Complete every required field and close all objects and arrays before returning.\n"
+            "17. Do not include markdown code fences, comments, trailing commas, or any text outside the JSON object.\n"
+            "18. Keep each issue as an independent object and preserve exact error line numbers from the original source.\n"
         )
 
         problem_ctx_str = ""
