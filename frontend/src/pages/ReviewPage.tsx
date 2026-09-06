@@ -1339,7 +1339,7 @@ const ReviewPage = () => {
 
   const codeLines = useMemo(() => code.split('\n'), [code]);
 
-  const realTimeSyntaxErrors = useMemo(() => detectSyntaxErrors(code, language, isProblemUrlActive), [code, language, isProblemUrlActive]);
+  const realTimeSyntaxErrors = useMemo(() => detectSyntaxErrors(code, language), [code, language]);
 
   const { level1Errors, improvements } = useMemo(() => {
     if (isAlreadyOptimal) {
