@@ -96,7 +96,7 @@ export const traceRootSyntaxErrorLine = (
 export const detectSyntaxErrors = (
   code: string,
   language: string,
-  isProblemUrlActive: boolean = false
+  //isProblemUrlActive: boolean = false
 ): RealTimeSyntaxError[] => {
   if (!code.trim()) return [];
 

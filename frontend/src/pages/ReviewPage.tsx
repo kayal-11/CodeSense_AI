@@ -658,13 +658,13 @@ const formatLineLabel = (lineNumber: number | null): string => {
   return `Line ${lineNumber}`;
 };
 
-const formatLineRangeLabel = (lineNumber: number | null, endLineNumber?: number): string => {
+{/*const formatLineRangeLabel = (lineNumber: number | null, endLineNumber?: number): string => {
   if (!lineNumber) return '—';
   if (endLineNumber && endLineNumber > lineNumber) {
     return `Lines ${lineNumber}-${endLineNumber}`;
   }
   return `Line ${lineNumber}`;
-};
+}*/}
 
 const suggestionKey = (finding: FindingCard): string =>
   `${finding.severity}|${finding.lineNumber ?? 0}|${finding.endLineNumber ?? 0}|${finding.startCol ?? 0}|${finding.endCol ?? 0}|${finding.title}|${finding.description}`.toLowerCase();
